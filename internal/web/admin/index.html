@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Loft Admin</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:var(--tg-theme-bg-color,#fff);--text:var(--tg-theme-text-color,#000);--hint:var(--tg-theme-hint-color,#999);--link:var(--tg-theme-link-color,#2481cc);--button:var(--tg-theme-button-color,#2481cc);--button-text:var(--tg-theme-button-text-color,#fff);--secondary:var(--tg-theme-secondary-bg-color,#f4f4f5);--section:var(--tg-theme-section-bg-color,#fff)}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);padding:16px;max-width:600px;margin:0 auto;font-size:14px;line-height:1.5}
+h1{font-size:20px;font-weight:600;margin-bottom:16px}
+h2{font-size:16px;font-weight:600;margin:16px 0 8px}
+.card{background:var(--section);border-radius:12px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--secondary)}
+.row:last-child{border-bottom:none}
+.btn{display:block;width:100%;padding:10px;border:none;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;text-align:center;margin:4px 0;background:var(--button);color:var(--button-text)}
+.btn-secondary{background:var(--secondary);color:var(--text)}
+.btn-danger{background:#e53e3e;color:#fff}
+.btn-small{padding:6px 12px;width:auto;display:inline-block;font-size:12px;border-radius:6px;margin:2px}
+.input{width:100%;padding:10px;border:1px solid var(--hint);border-radius:10px;font-size:14px;background:var(--bg);color:var(--text);margin:4px 0;outline:none}
+.input:focus{border-color:var(--button)}
+.grid{display:grid;gap:8px}
+.grid-2{grid-template-columns:1fr 1fr}
+.tabs{display:flex;gap:4px;margin-bottom:12px;overflow-x:auto;padding-bottom:4px}
+.tab{padding:8px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;background:var(--secondary);color:var(--text);border:none;font-size:13px}
+.tab.active{background:var(--button);color:var(--button-text)}
+.badge{display:inline-block;background:var(--button);color:var(--button-text);border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600}
+.status-pending{color:#d69e2e}
+.status-confirmed{color:#38a169}
+.status-cancelled{color:#e53e3e}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);display:none;justify-content:center;align-items:center;z-index:100}
+.modal{background:var(--bg);border-radius:16px;padding:20px;width:90%;max-width:400px;max-height:80vh;overflow-y:auto}
+.modal.show{display:flex}
+.hidden{display:none !important}
+.mt-8{margin-top:8px}
+.mb-8{margin-bottom:8px}
+.text-center{text-align:center}
+.text-hint{color:var(--hint);font-size:12px}
+.flex-between{display:flex;justify-content:space-between;align-items:center}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;z-index:200;transition:opacity .3s;opacity:0}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div id="app" class="hidden">
+  <div class="flex-between mb-8"><h1 id="pageTitle">Панель управления</h1><span id="connectionStatus" class="badge">...</span></div>
+  <div class="tabs" id="navTabs"></div>
+  <div id="pageContent"></div>
+</div>
+<div id="loading" class="text-center"><p>Загрузка...</p></div>
+
+<div id="modal" class="modal-overlay"><div class="modal" id="modalContent"></div></div>
+<div id="toast" class="toast"></div>
+
+<script>
+const TG = window.Telegram.WebApp;
+TG.expand();
+TG.enableClosingConfirmation();
+
+const API_BASE = '';
+let token = null;
+let state = { events: [], menuItems: [], menuCats: [], prices: [], orders: [], settings: [], schedule: [] };
+
+const pages = [
+  { id:'dashboard', label:'\uD83D\uDCCA Дашборд' },
+  { id:'events', label:'\uD83C\uDFAD Афиша' },
+  { id:'menu', label:'\uD83C\uDF7D Меню' },
+  { id:'prices', label:'\uD83D\uDCB0 Цены' },
+  { id:'orders', label:'\uD83D\uDED2 Заказы' },
+  { id:'schedule', label:'\uD83D\uDCC5 Расписание' },
+  { id:'settings', label:'\u2699 Настройки' },
+];
+
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
+function $(id){return document.getElementById(id)}
+function escapeHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+async function api(method, path, body){
+  const opts={method,headers:{}};
+  if(token) opts.headers['X-Telegram-Init-Data']=token;
+  if(body){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}
+  const res=await fetch(API_BASE+'/api/admin'+path,opts);
+  if(!res.ok){const e=await res.json().catch(()=>({error:res.statusText}));throw new Error(e.error||'Request failed')}
+  return res.json();
+}
+
+async function init(){
+  try{
+    token = TG.initData;
+    if(!token){showToast('Ошибка: нет initData');return}
+    const v = await api('POST','/verify');
+    if(!v.ok){showToast('Нет доступа');return}
+    renderNav();
+    navigate('dashboard');
+    $('loading').classList.add('hidden');
+    $('app').classList.remove('hidden');
+  }catch(e){showToast('Ошибка: '+e.message)}
+}
+
+function renderNav(){
+  const nav=$('navTabs');
+  nav.innerHTML=pages.map(p=>`<button class="tab" data-page="${p.id}">${p.label}</button>`).join('');
+  nav.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>navigate(t.dataset.page)));
+}
+
+function navigate(page){
+  navTabs.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.page===page));
+  const p=pages.find(x=>x.id===page);
+  $('pageTitle').textContent=p?p.label:'';
+  switch(page){
+    case 'dashboard': renderDashboard();break;
+    case 'events': renderEvents();break;
+    case 'menu': renderMenu();break;
+    case 'prices': renderPrices();break;
+    case 'orders': renderOrders();break;
+    case 'schedule': renderSchedule();break;
+    case 'settings': renderSettings();break;
+  }
+}
+
+async function renderDashboard(){
+  try{
+    const stats=await api('GET','/stats/month');
+    $('pageContent').innerHTML=`
+      <div class="card"><div class="grid grid-2">
+        <div class="text-center"><div style="font-size:24px;font-weight:700">${(stats.total_revenue||0).toLocaleString('ru')} \u20BD</div><div class="text-hint">Доход за месяц</div></div>
+        <div class="text-center"><div style="font-size:24px;font-weight:700">${stats.total_orders||0}</div><div class="text-hint">Заказов</div></div>
+        <div class="text-center"><div style="font-size:18px;font-weight:600">${stats.unique_users||0}</div><div class="text-hint">Клиентов</div></div>
+        <div class="text-center"><div style="font-size:18px">\u2705 ${stats.confirmed||0} / \u23F3 ${stats.pending||0} / \u274C ${stats.cancelled||0}</div><div class="text-hint">Подтв / Ожид / Отм</div></div>
+      </div></div>
+      <div class="card"><b>По типам:</b><br>
+        \uD83C\uDF9F Билеты: ${(stats.tickets_revenue||0).toLocaleString('ru')} \u20BD<br>
+        \uD83D\uDD11 Аренда: ${(stats.rentals_revenue||0).toLocaleString('ru')} \u20BD<br>
+        \uD83C\uDF7D Меню: ${(stats.menu_revenue||0).toLocaleString('ru')} \u20BD
+      </div>`;
+  }catch(e){showToast(e.message)}
+}
+
+async function renderEvents(){
+  try{
+    state.events=await api('GET','/events');
+    let html='<button class="btn" onclick="showEventModal()">+ Добавить мероприятие</button>';
+    state.events.forEach(e=>{
+      html+=`<div class="card">
+        <div class="flex-between"><b>${escapeHtml(e.Title)}</b> ${e.IsActive?'<span class="badge">\u2705</span>':'<span class="badge" style="background:#999">\uD83D\uDD34 Скрыто</span>'}</div>
+        <div class="text-hint">${e.EventDate} ${e.TimeFrom}-${e.TimeTo} | ${e.Price} \u20BD</div>
+        <div class="mt-8"><button class="btn-small btn-secondary" onclick="showEventModal(${e.ID})">\u270F</button>
+        <button class="btn-small btn-danger" onclick="deleteEvent(${e.ID})">\uD83D\uDDD1</button>
+        <button class="btn-small btn-secondary" onclick="toggleEvent(${e.ID})">${e.IsActive?'\uD83D\uDC41 Скрыть':'\uD83D\uDC41 Показать'}</button></div>
+      </div>`;
+    });
+    $('pageContent').innerHTML=html;
+  }catch(e){showToast(e.message)}
+}
+
+async function showEventModal(id){
+  const e=id?state.events.find(x=>x.ID===id):{Title:'',Description:'',EventDate:'',TimeFrom:'',TimeTo:'',Price:0,IsActive:true};
+  const m=$('modalContent');
+  m.innerHTML=`
+    <h2>${id?'Редактировать':'Добавить'} мероприятие</h2>
+    <input class="input" id="evTitle" placeholder="Название" value="${escapeHtml(e.Title||'')}">
+    <textarea class="input" id="evDesc" placeholder="Описание" rows="3">${escapeHtml(e.Description||'')}</textarea>
+    <input class="input" id="evDate" type="date" value="${e.EventDate||''}">
+    <div class="grid grid-2">
+      <input class="input" id="evTimeFrom" type="time" value="${e.TimeFrom||''}" placeholder="Начало">
+      <input class="input" id="evTimeTo" type="time" value="${e.TimeTo||''}" placeholder="Конец">
+    </div>
+    <input class="input" id="evPrice" type="number" placeholder="Цена" value="${e.Price||0}">
+    <div class="grid grid-2 mt-8">
+      <button class="btn" onclick="saveEvent(${id||''})">\u2705 Сохранить</button>
+      <button class="btn btn-secondary" onclick="closeModal()">\u274C Отмена</button>
+    </div>`;
+  $('modal').classList.add('show');
+}
+
+async function saveEvent(id){
+  const body={
+    Title:$('evTitle').value,
+    Description:$('evDesc').value,
+    EventDate:$('evDate').value,
+    TimeFrom:$('evTimeFrom').value,
+    TimeTo:$('evTimeTo').value,
+    Price:parseFloat($('evPrice').value)||0,
+    IsActive:id?state.events.find(x=>x.ID===id)?.IsActive:true,
+  };
+  try{
+    if(id){await api('PUT','/events/'+id,body)}else{await api('POST','/events',body)}
+    closeModal();renderEvents();showToast('\u2705 Сохранено');
+  }catch(e){showToast(e.message)}
+}
+
+async function deleteEvent(id){
+  if(!confirm('Удалить мероприятие?'))return;
+  try{await api('DELETE','/events/'+id);renderEvents();showToast('\u2705 Удалено')}catch(e){showToast(e.message)}
+}
+
+async function toggleEvent(id){
+  const e=state.events.find(x=>x.ID===id);
+  if(!e)return;
+  try{await api('PUT','/events/'+id,{...e,IsActive:!e.IsActive});renderEvents();showToast('\u2705 Обновлено')}catch(e){showToast(e.message)}
+}
+
+async function renderMenu(){
+  try{
+    state.menuItems=await api('GET','/menu/items');
+    state.menuCats=await api('GET','/menu/categories');
+    const catMap={};state.menuCats.forEach(c=>catMap[c.ID]=c);
+    let html=`
+      <div class="grid grid-2 mb-8">
+        <button class="btn" onclick="showMenuItemModal()">+ Добавить позицию</button>
+        <button class="btn btn-secondary" onclick="showCategoryModal()">\uD83D\uDCC2 Категории</button>
+      </div>`;
+    state.menuCats.forEach(cat=>{
+      const items=state.menuItems.filter(i=>i.CategoryID===cat.ID);
+      if(items.length===0)return;
+      html+=`<div class="card"><b>${cat.Emoji||''} ${escapeHtml(cat.Name)}</b>`;
+      items.forEach(i=>{
+        html+=`<div class="row"><span>${escapeHtml(i.Name)} ${i.IsAvailable?'':'(\uD83D\uDD34 скрыто)'}</span>
+          <span><b>${i.Price} \u20BD</b>
+          <button class="btn-small btn-secondary" onclick="showMenuItemModal(${i.ID})">\u270F</button>
+          <button class="btn-small btn-danger" onclick="deleteMenuItem(${i.ID})">\uD83D\uDDD1</button></span></div>`;
+      });
+      html+=`</div>`;
+    });
+    $('pageContent').innerHTML=html;
+  }catch(e){showToast(e.message)}
+}
+
+async function showMenuItemModal(id){
+  const i=id?state.menuItems.find(x=>x.ID===id):{Name:'',Price:0,CategoryID:0,IsAvailable:true};
+  const cats=state.menuCats.map(c=>`<option value="${c.ID}" ${c.ID===i.CategoryID?'selected':''}>${c.Emoji||''} ${c.Name}</option>`).join('');
+  const m=$('modalContent');
+  m.innerHTML=`
+    <h2>${id?'Редактировать':'Добавить'} позицию</h2>
+    <select class="input" id="miCat">${cats}</select>
+    <input class="input" id="miName" placeholder="Название" value="${escapeHtml(i.Name||'')}">
+    <input class="input" id="miPrice" type="number" placeholder="Цена" value="${i.Price||0}">
+    <label style="display:flex;align-items:center;gap:8px;margin:8px 0"><input type="checkbox" id="miAvail" ${i.IsAvailable?'checked':''}> Доступно</label>
+    <div class="grid grid-2 mt-8">
+      <button class="btn" onclick="saveMenuItem(${id||''})">\u2705 Сохранить</button>
+      <button class="btn btn-secondary" onclick="closeModal()">\u274C Отмена</button>
+    </div>`;
+  $('modal').classList.add('show');
+}
+
+async function saveMenuItem(id){
+  const body={
+    Name:$('miName').value,
+    Price:parseFloat($('miPrice').value)||0,
+    CategoryID:parseInt($('miCat').value),
+    IsAvailable:$('miAvail').checked,
+  };
+  try{
+    if(id){await api('PUT','/menu/items/'+id,body)}else{await api('POST','/menu/items',body)}
+    closeModal();renderMenu();showToast('\u2705 Сохранено');
+  }catch(e){showToast(e.message)}
+}
+
+async function deleteMenuItem(id){
+  if(!confirm('Удалить позицию?'))return;
+  try{await api('DELETE','/menu/items/'+id);renderMenu();showToast('\u2705 Удалено')}catch(e){showToast(e.message)}
+}
+
+async function showCategoryModal(){
+  const cats=state.menuCats.map(c=>`<div class="row"><span>${c.Emoji||''} ${escapeHtml(c.Name)}</span></div>`).join('');
+  const m=$('modalContent');
+  m.innerHTML=`
+    <h2>Категории</h2>
+    ${cats||'<p class="text-hint">Нет категорий</p>'}
+    <input class="input" id="catName" placeholder="Новая категория (с эмодзи)">
+    <button class="btn" onclick="addCategory()">+ Добавить</button>
+    <button class="btn btn-secondary mt-8" onclick="closeModal()">Закрыть</button>`;
+  $('modal').classList.add('show');
+}
+
+async function addCategory(){
+  const name=$('catName').value;
+  if(!name)return;
+  try{
+    let emoji='',clean=name;
+    const m=name.match(/^(\p{Emoji})\s*(.*)/u);
+    if(m){emoji=m[1];clean=m[2]}
+    await api('POST','/menu/categories',{Name:clean,Emoji:emoji,SortOrder:state.menuCats.length});
+    state.menuCats=await api('GET','/menu/categories');
+    showCategoryModal();showToast('\u2705 Добавлено');
+  }catch(e){showToast(e.message)}
+}
+
+async function renderPrices(){
+  try{
+    state.prices=await api('GET','/prices');
+    const wd=state.prices.find(p=>p.DayType==='weekday');
+    const we=state.prices.find(p=>p.DayType==='weekend');
+    $('pageContent').innerHTML=`
+      <div class="card">
+        <div class="row"><span>\uD83D\uDCC5 Будни (Пн-Пт)</span><span><b>${wd?.PricePerHour||0} \u20BD/ч</b> <button class="btn-small btn-secondary" onclick="showPriceModal('weekday',${wd?.PricePerHour||0})">\u270F</button></span></div>
+        <div class="row"><span>\uD83C\uDF89 Выходные (Сб-Вс)</span><span><b>${we?.PricePerHour||0} \u20BD/ч</b> <button class="btn-small btn-secondary" onclick="showPriceModal('weekend',${we?.PricePerHour||0})">\u270F</button></span></div>
+      </div>`;
+  }catch(e){showToast(e.message)}
+}
+
+function showPriceModal(dayType,current){
+  const label=dayType==='weekday'?'будни':'выходные';
+  const m=$('modalContent');
+  m.innerHTML=`
+    <h2>Изменить тариф — ${label}</h2>
+    <p class="text-hint">Текущая: ${current} \u20BD/ч</p>
+    <input class="input" id="prPrice" type="number" placeholder="Новая цена" value="${current}">
+    <div class="grid grid-2 mt-8">
+      <button class="btn" onclick="savePrice('${dayType}')">\u2705 Сохранить</button>
+      <button class="btn btn-secondary" onclick="closeModal()">\u274C Отмена</button>
+    </div>`;
+  $('modal').classList.add('show');
+}
+
+async function savePrice(dayType){
+  try{
+    await api('PUT','/prices/'+dayType,{price_per_hour:parseFloat($('prPrice').value)});
+    closeModal();renderPrices();showToast('\u2705 Цена обновлена');
+  }catch(e){showToast(e.message)}
+}
+
+async function renderOrders(){
+  try{
+    state.orders=await api('GET','/orders?status=pending');
+    const allOrders=await api('GET','/orders');
+    const pend=state.orders.length;
+    $('pageContent').innerHTML=`
+      <div class="card mb-8"><b>\uD83D\uDD14 Ожидают подтверждения: ${pend}</b></div>
+      <div class="tabs">
+        <button class="tab active" onclick="loadOrders('pending',this)">\u23F3 Ожидают</button>
+        <button class="tab" onclick="loadOrders('',this)">\uD83D\uDCCB Все</button>
+      </div>
+      <div id="ordersList"></div>`;
+    renderOrdersList(state.orders);
+  }catch(e){showToast(e.message)}
+}
+
+async function loadOrders(status,btn){
+  document.querySelectorAll('#pageContent .tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  try{
+    const orders=await api('GET','/orders'+(status?'?status='+status:''));
+    renderOrdersList(orders);
+  }catch(e){showToast(e.message)}
+}
+
+function renderOrdersList(orders){
+  if(!orders.length){$('ordersList').innerHTML='<p class="text-hint">Нет заказов</p>';return}
+  const icons={'pending':'\u23F3','confirmed':'\u2705','cancelled':'\u274C','refunded':'\uD83D\uDD04'};
+  $('ordersList').innerHTML=orders.map(o=>`
+    <div class="card">
+      <div class="flex-between"><b>#${String(o.ID).padStart(5,'0')}</b> <span class="status-${o.Status}">${icons[o.Status]||''} ${o.Status}</span></div>
+      <div class="text-hint">${o.CreatedAt||''} | ${o.TotalPrice||0} \u20BD</div>
+      ${o.Status==='pending'?`
+      <div class="grid grid-2 mt-8">
+        <button class="btn-small btn" onclick="orderAction(${o.ID},'confirm')">\u2705 Деньги получены</button>
+        <button class="btn-small btn-danger" onclick="orderAction(${o.ID},'reject')">\u274C Отклонить</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+async function orderAction(id,action){
+  try{
+    await api('PUT',`/orders/${id}/${action}`);
+    renderOrders();showToast('\u2705 Готово');
+  }catch(e){showToast(e.message)}
+}
+
+async function renderSchedule(){
+  try{
+    state.schedule=await api('GET','/schedule/month');
+    let html=`
+      <div class="tabs">
+        <button class="tab" onclick="loadSchedule('today',this)">Сегодня</button>
+        <button class="tab active" onclick="loadSchedule('week',this)">Неделя</button>
+        <button class="tab" onclick="loadSchedule('month',this)">Месяц</button>
+        <button class="tab" onclick="loadSchedule('all',this)">Все</button>
+      </div>
+      <div id="scheduleList"></div>`;
+    $('pageContent').innerHTML=html;
+    renderScheduleList(state.schedule);
+  }catch(e){showToast(e.message)}
+}
+
+async function loadSchedule(period,btn){
+  document.querySelectorAll('#pageContent .tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  try{
+    const s=await api('GET','/schedule/'+period);
+    renderScheduleList(s);
+  }catch(e){showToast(e.message)}
+}
+
+function renderScheduleList(list){
+  if(!list.length){$('scheduleList').innerHTML='<p class="text-hint">Нет бронирований</p>';return}
+  $('scheduleList').innerHTML=list.map(r=>`
+    <div class="card">
+      <div class="flex-between"><b>${r.Date||''}</b> \uD83D\uDC64 @${r.User?.Username||'?'}</div>
+      <div>\uD83D\uDD50 ${r.TimeFrom}-${r.TimeTo} | \uD83D\uDCB0 ${r.TotalPrice||0} \u20BD | <span class="status-${r.Status}">${r.Status}</span></div>
+    </div>`).join('');
+}
+
+async function renderSettings(){
+  try{
+    state.settings=await api('GET','/settings');
+    const getVal=(k)=>state.settings.find(s=>s.Key===k)?.Value||'';
+    $('pageContent').innerHTML=`
+      <div class="card">
+        <div class="row"><span>\uD83D\uDCF2 Номер для оплаты</span><span><button class="btn-small btn-secondary" onclick="showSettingModal('payment_phone','Номер для оплаты','${escapeHtml(getVal('payment_phone'))}')">\u270F</button></span></div>
+        <div class="row"><span>\uD83C\uDFE0 Название лофта</span><span><button class="btn-small btn-secondary" onclick="showSettingModal('loft_name','Название лофта','${escapeHtml(getVal('loft_name'))}')">\u270F</button></span></div>
+      </div>
+      <div class="card">
+        <div class="row"><span>\uD83D\uDCC5 Текущая дата (сервер)</span><span>${new Date().toLocaleDateString('ru')}</span></div>
+      </div>`;
+  }catch(e){showToast(e.message)}
+}
+
+function showSettingModal(key,label,current){
+  const m=$('modalContent');
+  m.innerHTML=`
+    <h2>${label}</h2>
+    <p class="text-hint">Текущее: ${current||'(не задано)'}</p>
+    <input class="input" id="setVal" placeholder="${label}" value="${escapeHtml(current)}">
+    <div class="grid grid-2 mt-8">
+      <button class="btn" onclick="saveSetting('${key}')">\u2705 Сохранить</button>
+      <button class="btn btn-secondary" onclick="closeModal()">\u274C Отмена</button>
+    </div>`;
+  $('modal').classList.add('show');
+}
+
+async function saveSetting(key){
+  try{
+    await api('PUT','/settings/'+key,{value:$('setVal').value});
+    closeModal();renderSettings();showToast('\u2705 Сохранено');
+  }catch(e){showToast(e.message)}
+}
+
+function closeModal(){$('modal').classList.remove('show')}
+$('modal').addEventListener('click',e=>{if(e.target===$('modal'))closeModal()});
+
+init();
+</script>
+</body>
+</html>

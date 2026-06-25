@@ -560,6 +560,8 @@ func isReservationIntervalAvailable(date time.Time, timeFrom, timeTo string, boo
 		if bookingEnd <= bookingStart {
 			bookingEnd += 24 * 60
 		}
+		// 1-hour gap after each reservation
+		bookingEnd += 60
 		if start < bookingEnd && end > bookingStart {
 			return false
 		}

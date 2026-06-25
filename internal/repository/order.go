@@ -66,17 +66,59 @@ func (r *OrderRepo) UpdateStatus(id uint, status string) error {
 	return r.db.Model(&db.Order{}).Where("id = ?", id).Update("status", status).Error
 }
 
-func (r *OrderRepo) GetStats(period string) (map[string]interface{}, error) {
-	query := r.db.Model(&db.Order{})
+func (r *OrderRepo) SetReviewDueAt(id uint, dueAt time.Time) error {
+	return r.db.Model(&db.Order{}).Where("id = ?", id).Update("review_due_at", dueAt).Error
+}
+
+func (r *OrderRepo) GetDueReviewRequests(now time.Time) ([]db.Order, error) {
+	var orders []db.Order
+	err := r.db.Preload("User").
+		Where("review_due_at IS NOT NULL AND review_due_at <= ? AND review_sent_at IS NULL", now).
+		Where("status NOT IN ?", []string{"cancelled", "refunded"}).
+		Order("review_due_at ASC").
+		Find(&orders).Error
+	return orders, err
+}
+
+func (r *OrderRepo) MarkReviewRequested(id uint, sentAt time.Time) error {
+	return r.db.Model(&db.Order{}).Where("id = ? AND review_sent_at IS NULL", id).Update("review_sent_at", sentAt).Error
+}
+
+func (r *OrderRepo) PrepaidByReservationID(reservationID uint) (float64, error) {
+	var total float64
+	err := r.db.Model(&db.Order{}).
+		Where("reservation_id = ? AND status IN ?", reservationID, []string{"prepaid", "confirmed"}).
+		Select("COALESCE(SUM(total_price), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+func (r *OrderRepo) CancelByReservationID(reservationID uint) error {
+	return r.db.Model(&db.Order{}).
+		Where("reservation_id = ? AND status != ?", reservationID, "cancelled").
+		Update("status", "cancelled").Error
+}
+
+func (r *OrderRepo) GetStats(period string, from, to *time.Time) (map[string]interface{}, error) {
+	query := r.db.Model(&db.Order{}).Joins("LEFT JOIN reservations ON reservations.id = orders.reservation_id")
 	now := time.Now()
 
-	switch period {
-	case "today":
-		query = query.Where("created_at >= ?", now.Truncate(24*time.Hour))
-	case "week":
-		query = query.Where("created_at >= ?", now.AddDate(0, 0, -7))
-	case "month":
-		query = query.Where("created_at >= ?", now.AddDate(0, -1, 0))
+	if from != nil || to != nil {
+		if from != nil {
+			query = query.Where("orders.created_at >= ?", *from)
+		}
+		if to != nil {
+			query = query.Where("orders.created_at < ?", to.AddDate(0, 0, 1))
+		}
+	} else {
+		switch period {
+		case "today":
+			query = query.Where("orders.created_at >= ?", now.Truncate(24*time.Hour))
+		case "week":
+			query = query.Where("orders.created_at >= ?", now.AddDate(0, 0, -7))
+		case "month":
+			query = query.Where("orders.created_at >= ?", now.AddDate(0, -1, 0))
+		}
 	}
 
 	type StatsResult struct {
@@ -90,12 +132,12 @@ func (r *OrderRepo) GetStats(period string) (map[string]interface{}, error) {
 
 	var result StatsResult
 	query.Select(`
-		COALESCE(SUM(total_price), 0) as total_revenue,
+		COALESCE(SUM(CASE WHEN orders.status IN ('confirmed', 'prepaid') AND (orders.reservation_id IS NULL OR reservations.status != 'cancelled') THEN orders.total_price ELSE 0 END), 0) as total_revenue,
 		COUNT(*) as total_orders,
-		COALESCE(SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END), 0) as confirmed,
-		COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
-		COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
-		COUNT(DISTINCT user_id) as unique_users
+		COALESCE(SUM(CASE WHEN orders.status IN ('confirmed', 'prepaid') AND (orders.reservation_id IS NULL OR reservations.status != 'cancelled') THEN 1 ELSE 0 END), 0) as confirmed,
+		COALESCE(SUM(CASE WHEN orders.status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
+		COALESCE(SUM(CASE WHEN orders.status = 'cancelled' OR reservations.status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
+		COUNT(DISTINCT orders.user_id) as unique_users
 	`).Scan(&result)
 
 	stats := map[string]interface{}{
@@ -111,17 +153,21 @@ func (r *OrderRepo) GetStats(period string) (map[string]interface{}, error) {
 		Type  string
 		Total float64
 	}
-	r.db.Raw(`
-		SELECT
-			CASE
-				WHEN event_id IS NOT NULL THEN 'tickets'
-				WHEN reservation_id IS NOT NULL THEN 'rentals'
-				ELSE 'menu'
-			END as type,
-			COALESCE(SUM(total_price), 0) as total
-		FROM orders
-		GROUP BY type
-	`).Scan(&revenueByType)
+	revenueQuery := r.db.Model(&db.Order{}).Joins("LEFT JOIN reservations ON reservations.id = orders.reservation_id")
+	revenueQuery = revenueQuery.Where("orders.status IN ?", []string{"confirmed", "prepaid"}).Where("orders.reservation_id IS NULL OR reservations.status != ?", "cancelled")
+	if from != nil {
+		revenueQuery = revenueQuery.Where("orders.created_at >= ?", *from)
+	} else if period == "today" {
+		revenueQuery = revenueQuery.Where("orders.created_at >= ?", now.Truncate(24*time.Hour))
+	} else if period == "week" {
+		revenueQuery = revenueQuery.Where("orders.created_at >= ?", now.AddDate(0, 0, -7))
+	} else if period == "month" {
+		revenueQuery = revenueQuery.Where("orders.created_at >= ?", now.AddDate(0, -1, 0))
+	}
+	if to != nil {
+		revenueQuery = revenueQuery.Where("orders.created_at < ?", to.AddDate(0, 0, 1))
+	}
+	revenueQuery.Select(`CASE WHEN orders.event_id IS NOT NULL THEN 'tickets' WHEN orders.reservation_id IS NOT NULL THEN 'rentals' ELSE 'menu' END as type, COALESCE(SUM(orders.total_price), 0) as total`).Group("type").Scan(&revenueByType)
 
 	for _, rbt := range revenueByType {
 		stats[rbt.Type+"_revenue"] = rbt.Total
@@ -138,4 +184,14 @@ func (r *OrderRepo) CountByEventID(eventID uint) (int64, error) {
 	var count int64
 	err := r.db.Model(&db.Order{}).Where("event_id = ? AND status = ?", eventID, "confirmed").Count(&count).Error
 	return count, err
+}
+
+func (r *OrderRepo) HasActiveEventTicket(userID uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&db.Order{}).
+		Joins("JOIN events ON events.id = orders.event_id").
+		Where("orders.user_id = ? AND orders.status = ?", userID, "confirmed").
+		Where("events.is_active = ? AND events.event_date >= ?", true, time.Now().Format("2006-01-02")).
+		Count(&count).Error
+	return count > 0, err
 }

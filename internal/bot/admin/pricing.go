@@ -38,7 +38,7 @@ func (h *PricingHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 		return
 	}
 
-	text := fmt.Sprintf("\U0001F4B0 Тарифы на аренду лофта\n\n\U0001F4C5 Будние дни (Пн \u2013 Пт):  %.0f \u20BD / час\n\U0001F389 Выходные дни (Сб \u2013 Вс): %.0f \u20BD / час",
+	text := fmt.Sprintf("\U0001F4B0 Тарифы на аренду лофта\n\n\U0001F4C5 Будние дни (Пн \u2013 Чт):  %.0f \u20BD / час\n\U0001F389 Выходные дни (Пт \u2013 Вс): %.0f \u20BD / час",
 		weekday.PricePerHour, weekend.PricePerHour)
 
 	keyboard := [][]models.InlineKeyboardButton{
@@ -104,7 +104,7 @@ func (h *PricingHandler) HandleNewPrice(ctx context.Context, b *bot.Bot, chatID 
 	}
 
 	h.fsm.SetState(telegramID, "admin", stateStr, map[string]interface{}{
-		"day_type": dayType,
+		"day_type":  dayType,
 		"new_price": price,
 	})
 

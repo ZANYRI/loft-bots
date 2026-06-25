@@ -2,8 +2,17 @@ package client
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -68,40 +77,72 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 	if eventID, ok := data["event_id"]; ok {
 		event, err := h.eventRepo.GetByID(uint(eventID.(float64)))
 		if err == nil {
-			text += fmt.Sprintf("\U0001F39F Билет на «%s» \u2014 %.0f \u20BD\n", event.Title, event.Price)
-			totalPrice += event.Price
+			quantity, _ := data["ticket_quantity"].(float64)
+			if quantity < 1 {
+				quantity = 1
+			}
+			text += fmt.Sprintf("\U0001F39F Билет на «%s» × %d \u2014 %.0f \u20BD\n", event.Title, int(quantity), event.Price*quantity)
+			totalPrice += event.Price * quantity
 		}
 	}
 
+	reservationFullPrice := 0.0
 	if _, ok := data["reservation_id"]; ok {
 		totalFromData, _ := data["total_price"].(float64)
-		menuTotal := h.calculateMenuTotal(data)
-		reservationPrice := totalFromData - menuTotal
-		text += fmt.Sprintf("\U0001F511 Бронирование лофта \u2014 %.0f \u20BD\n", reservationPrice)
-		totalPrice += totalFromData
+		reservationFullPrice = totalFromData
+		prepaymentPercent := h.settingInt("prepayment_percent", 30)
+		if prepaymentPercent < 0 {
+			prepaymentPercent = 0
+		}
+		if prepaymentPercent > 100 {
+			prepaymentPercent = 100
+		}
+		prepaymentAmount := reservationFullPrice * float64(prepaymentPercent) / 100
+		text += fmt.Sprintf("\U0001F511 Бронирование лофта \u2014 %.0f \u20BD\n", reservationFullPrice)
+		text += fmt.Sprintf("\U0001F4B5 Предоплата %d%% \u2014 %.0f \u20BD\n", prepaymentPercent, prepaymentAmount)
+		totalPrice += prepaymentAmount
 	}
 
 	menuTotal := h.calculateMenuTotal(data)
 	if menuTotal > 0 {
-		text += fmt.Sprintf("\U0001F37D Меню \u2014 %.0f \u20BD\n", menuTotal)
+		text += "\U0001F37D Дополнительные услуги:\n"
+		for key, val := range data {
+			if len(key) <= 5 || key[:5] != "cart_" {
+				continue
+			}
+			item, ok := val.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := item["name"].(string)
+			price, _ := item["price"].(float64)
+			quantity, _ := item["qty"].(float64)
+			text += fmt.Sprintf("   • %s × %d — %.0f \u20BD\n", name, int(quantity), price*quantity)
+		}
+		text += fmt.Sprintf("   Итого доп. услуги — %.0f \u20BD\n", menuTotal)
+		totalPrice += menuTotal
 	}
 
 	text += fmt.Sprintf("\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001F4B0 Итого: %.0f \u20BD\n\n", totalPrice)
-	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на номер:\n%s\n\n", paymentPhone)
-	text += "После оплаты нажмите кнопку ниже \U0001F447"
+	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на номер:\n%s\nТ-Банк, Кирилл П.\n\n", paymentPhone)
+	text += "После оплаты отправьте фото или PDF-чек одним сообщением. \U0001F447"
 
 	keyboard := [][]models.InlineKeyboardButton{
 		{
-			{Text: "\u2705 Я оплатил(а)", CallbackData: fmt.Sprintf("payment_done_%d", int(totalPrice))},
 			{Text: "\u274C Отмена", CallbackData: "main_menu"},
 		},
 	}
 
 	h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
-		"total_price":   totalPrice,
-		"menu_total":    menuTotal,
-		"payment_phone": paymentPhone,
+		"total_price":            totalPrice,
+		"reservation_full_price": reservationFullPrice,
+		"menu_total":             menuTotal,
+		"payment_phone":          paymentPhone,
 	})
+	_, paymentData, err := h.fsm.GetState(telegramID, "client")
+	if err == nil {
+		h.fsm.SetState(telegramID, "client", "payment:receipt", paymentData)
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
@@ -132,9 +173,21 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 	menuTotal, _ := data["menu_total"].(float64)
 
 	var eventID *uint
+	ticketQuantity := 0
 	if eid, ok := data["event_id"]; ok {
 		id := uint(eid.(float64))
 		eventID = &id
+		if quantity, ok := data["ticket_quantity"].(float64); ok {
+			ticketQuantity = int(quantity)
+		}
+		if ticketQuantity < 1 {
+			ticketQuantity = 1
+		}
+		reserved, err := h.eventRepo.ReservePlaces(id, ticketQuantity)
+		if err != nil || !reserved {
+			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "К сожалению, выбранное количество билетов уже закончилось."})
+			return
+		}
 	}
 
 	var reservationID *uint
@@ -144,13 +197,15 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 	}
 
 	order := &db.Order{
-		UserID:        user.ID,
-		EventID:       eventID,
-		ReservationID: reservationID,
-		MenuTotal:     menuTotal,
-		TotalPrice:    totalPrice,
-		Status:        "pending",
-		CreatedAt:     time.Now(),
+		UserID:         user.ID,
+		EventID:        eventID,
+		ReservationID:  reservationID,
+		MenuTotal:      menuTotal,
+		TicketQuantity: ticketQuantity,
+		ReceiptURL:     receiptURL(data),
+		TotalPrice:     totalPrice,
+		Status:         "pending",
+		CreatedAt:      time.Now(),
 	}
 
 	if err := h.orderRepo.Create(order); err != nil {
@@ -181,10 +236,150 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 
 	h.fsm.ClearState(telegramID, "client")
 
+	pendingMessage := h.settingValue("message_after_payment", "✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽.")
+	depositAmount := h.settingValue("deposit_amount", "0")
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   fmt.Sprintf("\u23F3 Отлично! Ваш платёж отправлен на проверку.\nМы уведомим вас, как только подтвердим получение средств.\n\nНомер вашего заказа: #%05d", order.ID),
+		Text: renderMessage(pendingMessage, map[string]string{
+			"order_id": fmt.Sprintf("%05d", order.ID),
+			"deposit":  depositAmount,
+		}),
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "🏠 Главное меню", CallbackData: "main_menu"}},
+		}},
 	})
+
+	if eventID != nil {
+		corkFee := "300"
+		if setting, err := h.settingsRepo.Get("cork_fee"); err == nil && setting != nil {
+			corkFee = setting.Value
+		}
+		delayedMessage := h.settingValue("message_delayed_event", "Важная информация про наш бар!\n\n🍹 У нас действует система BYOB.\nПриносите любимые напитки с собой. Пробковый сбор составит {cork_fee}₽ за бутылку (лед и бокалы мы предоставим). Вы можете заранее заказать кальян или напиток со скидкой 15%. Он будет готов точно к вашему приходу.")
+		delayMinutes := h.settingInt("message_delayed_event_minutes", 15)
+		go func() {
+			time.Sleep(time.Duration(delayMinutes) * time.Minute)
+			b.SendMessage(context.Background(), &bot.SendMessageParams{ChatID: chatID, Text: renderMessage(delayedMessage, map[string]string{"cork_fee": corkFee})})
+		}()
+	}
+	dueAt := reviewDueAt(h.settingInt("message_review_day_offset", 1), h.settingValue("message_review_next_day_time", "12:00"))
+	if err := h.orderRepo.SetReviewDueAt(order.ID, dueAt); err != nil {
+		log.Printf("failed to set review due time: order_id=%d err=%v", order.ID, err)
+	}
+}
+
+func (h *PaymentHandler) RequestReceipt(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+	_, data, err := h.fsm.GetState(telegramID, "client")
+	if err != nil {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.fsm.SetState(telegramID, "client", "payment:receipt", data)
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   "Пожалуйста, отправьте фото или скриншот чека одним сообщением. После этого заказ будет передан администратору на подтверждение.",
+	})
+}
+
+func (h *PaymentHandler) HandleReceipt(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, fileID string, isDocument bool) {
+	if !isDocument {
+		if url, err := saveTelegramReceipt(fileID); err == nil {
+			h.fsm.UpdateData(telegramID, "client", map[string]interface{}{"receipt_url": url})
+		} else {
+			log.Printf("failed to save receipt: %v", err)
+		}
+	}
+	h.HandlePaymentDone(ctx, b, chatID, telegramID)
+	receiptMessage := h.settingValue("message_receipt_received", "✅ Чек получен и ожидает подтверждения со стороны администратора. Это может занять некоторое время — не беспокойтесь.")
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: receiptMessage})
+}
+
+func (h *PaymentHandler) settingValue(key, fallback string) string {
+	setting, err := h.settingsRepo.Get(key)
+	if err != nil || setting == nil || strings.TrimSpace(setting.Value) == "" {
+		return fallback
+	}
+	return setting.Value
+}
+
+func (h *PaymentHandler) settingInt(key string, fallback int) int {
+	value := h.settingValue(key, "")
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func reviewDueAt(dayOffset int, nextDayTime string) time.Time {
+	now := time.Now()
+	if dayOffset < 0 {
+		dayOffset = 1
+	}
+	hour, minute := 12, 0
+	parts := strings.Split(strings.TrimSpace(nextDayTime), ":")
+	if len(parts) >= 2 {
+		if h, err := strconv.Atoi(parts[0]); err == nil && h >= 0 && h <= 23 {
+			hour = h
+		}
+		if m, err := strconv.Atoi(parts[1]); err == nil && m >= 0 && m <= 59 {
+			minute = m
+		}
+	}
+	target := time.Date(now.Year(), now.Month(), now.Day()+dayOffset, hour, minute, 0, 0, now.Location())
+	if !target.After(now) {
+		target = target.Add(24 * time.Hour)
+	}
+	return target
+}
+
+func renderMessage(template string, values map[string]string) string {
+	result := template
+	for key, value := range values {
+		result = strings.ReplaceAll(result, "{"+key+"}", value)
+	}
+	return result
+}
+
+func receiptURL(data map[string]interface{}) string {
+	value, _ := data["receipt_url"].(string)
+	return value
+}
+func saveTelegramReceipt(fileID string) (string, error) {
+	token := os.Getenv("CLIENT_BOT_TOKEN")
+	metaResponse, err := http.Get("https://api.telegram.org/bot" + token + "/getFile?file_id=" + fileID)
+	if err != nil {
+		return "", err
+	}
+	defer metaResponse.Body.Close()
+	var meta struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(metaResponse.Body).Decode(&meta); err != nil || !meta.OK {
+		return "", fmt.Errorf("telegram getFile failed")
+	}
+	fileResponse, err := http.Get("https://api.telegram.org/file/bot" + token + "/" + meta.Result.FilePath)
+	if err != nil {
+		return "", err
+	}
+	defer fileResponse.Body.Close()
+	if err := os.MkdirAll("uploads", 0755); err != nil {
+		return "", err
+	}
+	random := make([]byte, 12)
+	rand.Read(random)
+	name := "receipt-" + hex.EncodeToString(random) + filepath.Ext(meta.Result.FilePath)
+	destination, err := os.Create(filepath.Join("uploads", name))
+	if err != nil {
+		return "", err
+	}
+	defer destination.Close()
+	if _, err := io.Copy(destination, fileResponse.Body); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(os.Getenv("WEBAPP_URL"), "/") + "/uploads/" + name, nil
 }
 
 func (h *PaymentHandler) buildOrderText(order *db.Order, data map[string]interface{}, username string) string {
@@ -193,7 +388,11 @@ func (h *PaymentHandler) buildOrderText(order *db.Order, data map[string]interfa
 	if eventID, ok := data["event_id"]; ok {
 		event, err := h.eventRepo.GetByID(uint(eventID.(float64)))
 		if err == nil {
-			text += fmt.Sprintf("   \U0001F39F Билет «%s» \u2014 %.0f \u20BD\n", event.Title, event.Price)
+			quantity, _ := data["ticket_quantity"].(float64)
+			if quantity < 1 {
+				quantity = 1
+			}
+			text += fmt.Sprintf("   \U0001F39F Билет «%s» × %d \u2014 %.0f \u20BD\n", event.Title, int(quantity), event.Price*quantity)
 		}
 	}
 

@@ -38,6 +38,14 @@ func (r *ReservationRepo) GetBookedSlots(date time.Time) ([]db.Reservation, erro
 	return reservations, err
 }
 
+func (r *ReservationRepo) GetBookedSlotsAround(date time.Time) ([]db.Reservation, error) {
+	var reservations []db.Reservation
+	from := date.AddDate(0, 0, -1).Format("2006-01-02")
+	to := date.AddDate(0, 0, 1).Format("2006-01-02")
+	err := r.db.Where("date >= ? AND date <= ? AND status != ?", from, to, "cancelled").Find(&reservations).Error
+	return reservations, err
+}
+
 func (r *ReservationRepo) GetFiltered(period string) ([]db.Reservation, error) {
 	query := r.db.Preload("User").Where("status != ?", "cancelled")
 	now := time.Now()
@@ -63,12 +71,74 @@ func (r *ReservationRepo) GetAll() ([]db.Reservation, error) {
 	return reservations, err
 }
 
+func (r *ReservationRepo) GetByRange(from, to *time.Time) ([]db.Reservation, error) {
+	query := r.db.Preload("User").Where("status != ?", "cancelled")
+	if from != nil {
+		query = query.Where("date >= ?", from.Format("2006-01-02"))
+	}
+	if to != nil {
+		query = query.Where("date <= ?", to.Format("2006-01-02"))
+	}
+	var reservations []db.Reservation
+	err := query.Order("date ASC, time_from ASC").Find(&reservations).Error
+	return reservations, err
+}
+
 func (r *ReservationRepo) UpdateStatus(id uint, status string) error {
 	return r.db.Model(&db.Reservation{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func (r *ReservationRepo) Cancel(id uint) error {
 	return r.UpdateStatus(id, "cancelled")
+}
+
+func (r *ReservationRepo) GetDueBalanceReminders(now time.Time) ([]db.Reservation, error) {
+	var reservations []db.Reservation
+	err := r.db.Preload("User").
+		Where("status = ? AND balance_reminder_sent_at IS NULL", "confirmed").
+		Where("(date + time_from::time) <= ?", now).
+		Order("date ASC, time_from ASC").
+		Find(&reservations).Error
+	return reservations, err
+}
+
+func (r *ReservationRepo) GetDueStartReminders(now time.Time, minutesBefore int) ([]db.Reservation, error) {
+	var reservations []db.Reservation
+	target := now.Add(time.Duration(minutesBefore) * time.Minute)
+	err := r.db.Preload("User").
+		Where("status = ?", "confirmed").
+		Where("reminder_60_sent_at IS NULL").
+		Where("(date + time_from::time) <= ?", target).
+		Where("(date + time_from::time) > ?", now).
+		Order("date ASC, time_from ASC").
+		Find(&reservations).Error
+	return reservations, err
+}
+
+func (r *ReservationRepo) GetDueEndReminders(now time.Time, minutesBefore int) ([]db.Reservation, error) {
+	var reservations []db.Reservation
+	target := now.Add(time.Duration(minutesBefore) * time.Minute)
+	endExpr := `(date + time_to::time + CASE WHEN time_to <= time_from THEN interval '1 day' ELSE interval '0 day' END)`
+	err := r.db.Preload("User").
+		Where("status = ?", "confirmed").
+		Where("reminder_30_sent_at IS NULL").
+		Where(endExpr+" <= ?", target).
+		Where(endExpr+" > ?", now).
+		Order("date ASC, time_to ASC").
+		Find(&reservations).Error
+	return reservations, err
+}
+
+func (r *ReservationRepo) MarkStartReminderSent(id uint, minutesBefore int, sentAt time.Time) error {
+	return r.db.Model(&db.Reservation{}).Where("id = ? AND reminder_60_sent_at IS NULL", id).Update("reminder_60_sent_at", sentAt).Error
+}
+
+func (r *ReservationRepo) MarkEndReminderSent(id uint, sentAt time.Time) error {
+	return r.db.Model(&db.Reservation{}).Where("id = ? AND reminder_30_sent_at IS NULL", id).Update("reminder_30_sent_at", sentAt).Error
+}
+
+func (r *ReservationRepo) MarkBalanceReminderSent(id uint, sentAt time.Time) error {
+	return r.db.Model(&db.Reservation{}).Where("id = ? AND balance_reminder_sent_at IS NULL", id).Update("balance_reminder_sent_at", sentAt).Error
 }
 
 func (r *ReservationRepo) IsSlotAvailable(date time.Time, timeFrom, timeTo string) (bool, error) {
@@ -78,4 +148,13 @@ func (r *ReservationRepo) IsSlotAvailable(date time.Time, timeFrom, timeTo strin
 		Where("(time_from < ? AND time_to > ?)", timeTo, timeFrom).
 		Count(&count).Error
 	return count == 0, err
+}
+
+func (r *ReservationRepo) HasUpcomingReservation(userID uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&db.Reservation{}).
+		Where("user_id = ? AND status != ?", userID, "cancelled").
+		Where("date >= ?", time.Now().Format("2006-01-02")).
+		Count(&count).Error
+	return count > 0, err
 }

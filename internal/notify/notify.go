@@ -46,9 +46,9 @@ func SendToAdmins(ctx context.Context, b *bot.Bot, text string, kb *models.Inlin
 	adminIDs := GetAdminIDs()
 	for _, id := range adminIDs {
 		params := &bot.SendMessageParams{
-			ChatID:      id,
-			Text:        text,
-			ParseMode:   models.ParseModeHTML,
+			ChatID:    id,
+			Text:      text,
+			ParseMode: models.ParseModeHTML,
 		}
 		if kb != nil {
 			params.ReplyMarkup = kb
@@ -56,6 +56,26 @@ func SendToAdmins(ctx context.Context, b *bot.Bot, text string, kb *models.Inlin
 		_, err := b.SendMessage(ctx, params)
 		if err != nil {
 			log.Printf("failed to send notification to admin %d: %v", id, err)
+		}
+	}
+}
+
+func SendPhotoToAdmins(ctx context.Context, b *bot.Bot, fileID, caption string) {
+	for _, id := range GetAdminIDs() {
+		if _, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
+			ChatID:  id,
+			Photo:   &models.InputFileString{Data: fileID},
+			Caption: caption,
+		}); err != nil {
+			log.Printf("failed to send receipt to admin %d: %v", id, err)
+		}
+	}
+}
+
+func SendDocumentToAdmins(ctx context.Context, b *bot.Bot, fileID, caption string) {
+	for _, id := range GetAdminIDs() {
+		if _, err := b.SendDocument(ctx, &bot.SendDocumentParams{ChatID: id, Document: &models.InputFileString{Data: fileID}, Caption: caption}); err != nil {
+			log.Printf("failed to send receipt document to admin %d: %v", id, err)
 		}
 	}
 }

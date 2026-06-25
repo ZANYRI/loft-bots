@@ -33,7 +33,7 @@ func (f *FSM) GetState(telegramID int64, bot string) (string, map[string]interfa
 }
 
 func (f *FSM) SetState(telegramID int64, bot, state string, data map[string]interface{}) error {
-	var jsonData string
+	jsonData := "{}"
 	if data != nil {
 		b, _ := json.Marshal(data)
 		jsonData = string(b)
@@ -47,20 +47,23 @@ func (f *FSM) SetState(telegramID int64, bot, state string, data map[string]inte
 		UpdatedAt:  time.Now(),
 	}
 
-	return f.db.Where("telegram_id = ? AND bot = ?", telegramID, bot).Assign(us).FirstOrCreate(us).Error
+	return f.db.Save(us).Error
 }
 
 func (f *FSM) UpdateData(telegramID int64, bot string, data map[string]interface{}) error {
-	_, existingData, err := f.GetState(telegramID, bot)
+	currentState, existingData, err := f.GetState(telegramID, bot)
 	if err != nil {
 		return f.SetState(telegramID, bot, "", data)
+	}
+	if existingData == nil {
+		existingData = make(map[string]interface{})
 	}
 
 	for k, v := range data {
 		existingData[k] = v
 	}
 
-	return f.SetState(telegramID, bot, "", existingData)
+	return f.SetState(telegramID, bot, currentState, existingData)
 }
 
 func (f *FSM) ClearState(telegramID int64, bot string) error {

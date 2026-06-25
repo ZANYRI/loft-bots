@@ -83,7 +83,10 @@ func (h *ReservationHandler) showMonthPicker(ctx context.Context, b *bot.Bot, ch
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "\U0001F4C5 Выберите месяц:",
+		Text: `Планируете свой праздник или ищете место для корпоратива? 🥳
+Профессиональный звук, отсутствие ограничений по шуму после 23:00, вместимость до 20 человек.
+
+📅 Выберите месяц:`,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
@@ -100,7 +103,7 @@ func (h *ReservationHandler) HandleMonthPick(ctx context.Context, b *bot.Bot, ch
 
 func (h *ReservationHandler) showDatePicker(ctx context.Context, b *bot.Bot, chatID int64, month int, year int) {
 	now := time.Now()
-	monthName := time.Month(month).String()
+	monthName := russianMonthName(time.Month(month))
 
 	firstDay := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
 	lastDay := firstDay.AddDate(0, 1, -1).Day()
@@ -114,7 +117,7 @@ func (h *ReservationHandler) showDatePicker(ctx context.Context, b *bot.Bot, cha
 			continue
 		}
 
-		bookings, _ := h.reservationRepo.GetBookedSlots(date)
+		bookings, _ := h.reservationRepo.GetBookedSlotsAround(date)
 		isFullyBooked := h.isDateFullyBooked(date, bookings)
 
 		label := fmt.Sprintf("%2d", day)
@@ -155,55 +158,60 @@ func (h *ReservationHandler) showDatePicker(ctx context.Context, b *bot.Bot, cha
 }
 
 func (h *ReservationHandler) isDateFullyBooked(date time.Time, bookings []db.Reservation) bool {
-	if len(bookings) == 0 {
-		return false
-	}
-
-	slots := []string{"10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"}
-	for _, s := range slots {
-		available := true
-		for _, b := range bookings {
-			if b.TimeFrom <= s && b.TimeTo > s {
-				available = false
-				break
+	slots := hourlySlots(0, 23)
+	for _, from := range slots {
+		for _, to := range slots {
+			if isReservationIntervalAvailable(date, from, to, bookings) {
+				return false
 			}
-		}
-		if available {
-			return false
 		}
 	}
 	return true
 }
 
 func (h *ReservationHandler) HandleDatePick(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, day, month, year int) {
-	h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
+	date := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
+	if date.Before(time.Now().Truncate(24 * time.Hour)) {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Нельзя забронировать лофт задним числом. Выберите сегодняшнюю или будущую дату."})
+		h.showMonthPicker(ctx, b, chatID)
+		return
+	}
+	h.fsm.SetState(telegramID, "client", "reservation:pick_time_from", map[string]interface{}{
 		"date": fmt.Sprintf("%d-%02d-%02d", year, month, day),
 	})
-	h.fsm.SetState(telegramID, "client", "reservation:pick_time_from", nil)
-	h.showTimePicker(ctx, b, chatID, "from")
+	h.showTimePicker(ctx, b, chatID, telegramID)
 }
 
-func (h *ReservationHandler) showTimePicker(ctx context.Context, b *bot.Bot, chatID int64, pickerType string) {
-	times := []string{"10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"}
-	prefix := "res_time_" + pickerType + "_"
+func (h *ReservationHandler) showTimePicker(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+	times := hourlySlots(0, 23)
+	_, data, _ := h.fsm.GetState(telegramID, "client")
+	dateStr, _ := data["date"].(string)
+	date, _ := time.Parse("2006-01-02", dateStr)
+	bookings, _ := h.reservationRepo.GetBookedSlotsAround(date)
 
 	keyboard := make([][]models.InlineKeyboardButton, 0)
 	var row []models.InlineKeyboardButton
+	idx := 0
 
-	for i, t := range times {
+	for _, t := range times {
+		if !isStartHourAvailable(date, t, bookings) {
+			continue
+		}
 		row = append(row, models.InlineKeyboardButton{
 			Text:         t,
-			CallbackData: prefix + t,
+			CallbackData: "res_time_from_" + t,
 		})
-		if (i+1)%4 == 0 || i == len(times)-1 {
+		idx++
+		if idx%4 == 0 {
 			keyboard = append(keyboard, row)
 			row = make([]models.InlineKeyboardButton, 0)
 		}
 	}
-
-	pickerText := "\U0001F550 Выберите время начала:"
-	if pickerType == "to" {
-		pickerText = "\U0001F550 Выберите время окончания:\n(минимум 1 час от начала)"
+	if len(row) > 0 {
+		keyboard = append(keyboard, row)
+	}
+	if idx == 0 {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Нет свободного времени", CallbackData: "noop"}})
 	}
 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{
@@ -212,7 +220,7 @@ func (h *ReservationHandler) showTimePicker(ctx context.Context, b *bot.Bot, cha
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   pickerText,
+		Text:   "\U0001F550 Выберите время начала:",
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
@@ -220,38 +228,33 @@ func (h *ReservationHandler) showTimePicker(ctx context.Context, b *bot.Bot, cha
 }
 
 func (h *ReservationHandler) HandleTimeFrom(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, timeFrom string) {
-	h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
-		"time_from": timeFrom,
-	})
-	h.fsm.SetState(telegramID, "client", "reservation:pick_time_to", nil)
+	_, data, err := h.fsm.GetState(telegramID, "client")
+	if err != nil {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	data["time_from"] = timeFrom
+	h.fsm.SetState(telegramID, "client", "reservation:pick_time_to", data)
 	h.showTimePickerTo(ctx, b, chatID, telegramID, timeFrom)
 }
 
 func (h *ReservationHandler) showTimePickerTo(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, timeFrom string) {
-	times := []string{"11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"}
+	times := hourlySlots(0, 23)
 
 	_, data, _ := h.fsm.GetState(telegramID, "client")
 	dateStr, _ := data["date"].(string)
 	date, _ := time.Parse("2006-01-02", dateStr)
-	bookings, _ := h.reservationRepo.GetBookedSlots(date)
+	bookings, _ := h.reservationRepo.GetBookedSlotsAround(date)
 
 	keyboard := make([][]models.InlineKeyboardButton, 0)
 	var row []models.InlineKeyboardButton
 	idx := 0
 
 	for _, t := range times {
-		if t <= timeFrom {
+		if minutesOfDay(t) <= minutesOfDay(timeFrom) {
 			continue
 		}
-
-		available := true
-		for _, b := range bookings {
-			if b.TimeFrom < t && b.TimeTo > timeFrom {
-				available = false
-				break
-			}
-		}
-		if !available {
+		if !isReservationIntervalAvailable(date, timeFrom, t, bookings) {
 			continue
 		}
 
@@ -269,6 +272,12 @@ func (h *ReservationHandler) showTimePickerTo(ctx context.Context, b *bot.Bot, c
 	if len(row) > 0 {
 		keyboard = append(keyboard, row)
 	}
+	if idx == 0 {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Нет доступного времени окончания", CallbackData: "noop"}})
+	}
+	if hasNextDayEndTime(date, timeFrom, bookings) {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Следующий день", CallbackData: "res_next_day"}})
+	}
 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{
 		{Text: "\U0001F519 Назад", CallbackData: "reservation_start"},
@@ -280,6 +289,46 @@ func (h *ReservationHandler) showTimePickerTo(ctx context.Context, b *bot.Bot, c
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
+	})
+}
+
+func (h *ReservationHandler) showNextDayTimePickerTo(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+	_, data, _ := h.fsm.GetState(telegramID, "client")
+	timeFrom, _ := data["time_from"].(string)
+	dateStr, _ := data["date"].(string)
+	date, _ := time.Parse("2006-01-02", dateStr)
+	bookings, _ := h.reservationRepo.GetBookedSlotsAround(date)
+
+	keyboard := make([][]models.InlineKeyboardButton, 0)
+	var row []models.InlineKeyboardButton
+	idx := 0
+	for _, t := range hourlySlots(0, 23) {
+		if minutesOfDay(t) > minutesOfDay(timeFrom) {
+			continue
+		}
+		if !isReservationIntervalAvailable(date, timeFrom, t, bookings) {
+			break
+		}
+		row = append(row, models.InlineKeyboardButton{Text: t, CallbackData: "res_time_to_" + t})
+		idx++
+		if idx%4 == 0 {
+			keyboard = append(keyboard, row)
+			row = make([]models.InlineKeyboardButton, 0)
+		}
+	}
+	if len(row) > 0 {
+		keyboard = append(keyboard, row)
+	}
+	if idx == 0 {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Нет свободных часов", CallbackData: "noop"}})
+	}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "← Этот день", CallbackData: "res_time_from_" + timeFrom}})
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "\U0001F519 Назад", CallbackData: "reservation_start"}})
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        "\U0001F550 Выберите время окончания на следующий день:",
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
 	})
 }
 
@@ -307,17 +356,21 @@ func (h *ReservationHandler) HandleTimeTo(ctx context.Context, b *bot.Bot, chatI
 	}
 
 	h.fsm.SetState(telegramID, "client", "reservation:confirm", map[string]interface{}{
-		"date":         dateStr,
-		"time_from":    timeFrom,
-		"time_to":      timeTo,
-		"day_type":     dayType,
-		"hours":        hours,
+		"date":           dateStr,
+		"time_from":      timeFrom,
+		"time_to":        timeTo,
+		"day_type":       dayType,
+		"hours":          hours,
 		"price_per_hour": rentalPrice.PricePerHour,
-		"total_price":  totalPrice,
+		"total_price":    totalPrice,
 	})
 
-	text := fmt.Sprintf("\u2705 Проверьте детали бронирования:\n\n\U0001F4C5 Дата: %s (%s)\n\U0001F550 Время: %s \u2013 %s\n\u23F1 Продолжительность: %d часа(ов)\n\U0001F4B0 Стоимость: %.0f \u20BD (%.0f \u20BD/час)",
-		date.Format("2 January 2006"), dayTypeStr, timeFrom, timeTo, hours, totalPrice, rentalPrice.PricePerHour)
+	endNote := ""
+	if minutesOfDay(timeTo) <= minutesOfDay(timeFrom) {
+		endNote = " следующего дня"
+	}
+	text := fmt.Sprintf("\u2705 Проверьте детали бронирования:\n\n\U0001F4C5 Дата: %s (%s)\n\U0001F550 Время: %s \u2013 %s%s\n\u23F1 Продолжительность: %d часа(ов)\n\U0001F4B0 Стоимость: %.0f \u20BD (%.0f \u20BD/час)",
+		formatDateRU(date), dayTypeStr, timeFrom, timeTo, endNote, hours, totalPrice, rentalPrice.PricePerHour)
 
 	keyboard := [][]models.InlineKeyboardButton{
 		{
@@ -335,25 +388,42 @@ func (h *ReservationHandler) HandleTimeTo(ctx context.Context, b *bot.Bot, chatI
 	})
 }
 
-func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) bool {
 	_, data, err := h.fsm.GetState(telegramID, "client")
 	if err != nil {
 		log.Printf("no reservation data found: %v", err)
 		SendErrorMessage(ctx, b, chatID)
-		return
+		return false
 	}
 
 	user, err := h.userRepo.FindOrCreate(telegramID, "")
 	if err != nil {
 		log.Printf("failed to find user: %v", err)
 		SendErrorMessage(ctx, b, chatID)
-		return
+		return false
 	}
 
 	dateStr, _ := data["date"].(string)
 	date, _ := time.Parse("2006-01-02", dateStr)
+	date = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.Local)
+	if date.Before(time.Now().Truncate(24 * time.Hour)) {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Нельзя забронировать лофт задним числом. Выберите сегодняшнюю или будущую дату."})
+		h.showMonthPicker(ctx, b, chatID)
+		return false
+	}
 	timeFrom, _ := data["time_from"].(string)
 	timeTo, _ := data["time_to"].(string)
+	bookings, err := h.reservationRepo.GetBookedSlotsAround(date)
+	if err != nil {
+		log.Printf("failed to get booked slots: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return false
+	}
+	if !isReservationIntervalAvailable(date, timeFrom, timeTo, bookings) {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Это время уже занято. Выберите другой интервал."})
+		h.showTimePicker(ctx, b, chatID, telegramID)
+		return false
+	}
 	dayType, _ := data["day_type"].(string)
 	pricePerHour, _ := data["price_per_hour"].(float64)
 	totalPrice, _ := data["total_price"].(float64)
@@ -372,27 +442,27 @@ func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int
 	if err := h.reservationRepo.Create(reservation); err != nil {
 		log.Printf("failed to create reservation: %v", err)
 		SendErrorMessage(ctx, b, chatID)
-		return
+		return false
 	}
 
 	h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
 		"reservation_id": reservation.ID,
 	})
 
-	h.PromptMenuOrPayment(ctx, b, chatID, telegramID)
+	return true
 }
 
 func (h *ReservationHandler) PromptMenuOrPayment(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	keyboard := [][]models.InlineKeyboardButton{
 		{
-			{Text: "\U0001F355 Посмотреть меню", CallbackData: "menu_categories"},
-			{Text: "\u27A1 Продолжить без меню", CallbackData: "go_to_payment"},
+			{Text: "\U0001F355 Посмотреть доп. услуги", CallbackData: "menu_categories"},
+			{Text: "\u27A1 Продолжить без доп. услуг", CallbackData: "go_to_payment"},
 		},
 	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "\U0001F37D Хотите добавить что-нибудь из меню к вашему заказу?",
+		Text:   "\U0001F37D Хотите добавить дополнительные услуги к вашему заказу?",
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
@@ -401,7 +471,7 @@ func (h *ReservationHandler) PromptMenuOrPayment(ctx context.Context, b *bot.Bot
 
 func (h *ReservationHandler) getDayType(date time.Time) string {
 	weekday := date.Weekday()
-	if weekday == time.Saturday || weekday == time.Sunday {
+	if weekday == time.Friday || weekday == time.Saturday || weekday == time.Sunday {
 		return "weekend"
 	}
 	return "weekday"
@@ -435,17 +505,94 @@ func (h *ReservationHandler) HandleCallback(ctx context.Context, b *bot.Bot, cha
 				h.HandleTimeTo(ctx, b, chatID, telegramID, parts[3])
 			}
 		}
+	case "next":
+		if len(parts) >= 3 && parts[2] == "day" {
+			h.showNextDayTimePickerTo(ctx, b, chatID, telegramID)
+		}
 	}
 }
 
 func calcHours(timeFrom, timeTo string) int {
-	fromParts := strings.Split(timeFrom, ":")
-	toParts := strings.Split(timeTo, ":")
-	fromHour, _ := strconv.Atoi(fromParts[0])
-	toHour, _ := strconv.Atoi(toParts[0])
-	fromMin, _ := strconv.Atoi(fromParts[1])
-	toMin, _ := strconv.Atoi(toParts[1])
-
-	hours := float64(toHour-fromHour) + float64(toMin-fromMin)/60.0
+	fromMinutes := minutesOfDay(timeFrom)
+	toMinutes := minutesOfDay(timeTo)
+	if toMinutes <= fromMinutes {
+		toMinutes += 24 * 60
+	}
+	hours := float64(toMinutes-fromMinutes) / 60.0
 	return int(math.Ceil(hours))
+}
+
+func isStartHourAvailable(date time.Time, timeFrom string, bookings []db.Reservation) bool {
+	return isReservationIntervalAvailable(date, timeFrom, nextHour(timeFrom), bookings)
+}
+
+func hasNextDayEndTime(date time.Time, timeFrom string, bookings []db.Reservation) bool {
+	for _, timeTo := range hourlySlots(0, 23) {
+		if minutesOfDay(timeTo) > minutesOfDay(timeFrom) {
+			continue
+		}
+		if isReservationIntervalAvailable(date, timeFrom, timeTo, bookings) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextHour(value string) string {
+	minutes := minutesOfDay(value) + 60
+	if minutes >= 24*60 {
+		minutes -= 24 * 60
+	}
+	return fmt.Sprintf("%02d:00", minutes/60)
+}
+
+func isReservationIntervalAvailable(date time.Time, timeFrom, timeTo string, bookings []db.Reservation) bool {
+	start := minutesOfDay(timeFrom)
+	end := minutesOfDay(timeTo)
+	if end <= start {
+		end += 24 * 60
+	}
+	baseDate := dateOnly(date)
+	for _, booking := range bookings {
+		offset := int(dateOnly(booking.Date).Sub(baseDate).Hours()/24) * 24 * 60
+		bookingStart := offset + minutesOfDay(booking.TimeFrom)
+		bookingEnd := offset + minutesOfDay(booking.TimeTo)
+		if bookingEnd <= bookingStart {
+			bookingEnd += 24 * 60
+		}
+		if start < bookingEnd && end > bookingStart {
+			return false
+		}
+	}
+	return true
+}
+
+func dateOnly(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.Local)
+}
+
+func minutesOfDay(value string) int {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return 0
+	}
+	hour, _ := strconv.Atoi(parts[0])
+	minute, _ := strconv.Atoi(parts[1])
+	return hour*60 + minute
+}
+
+func hourlySlots(fromHour, toHour int) []string {
+	slots := make([]string, 0, toHour-fromHour+1)
+	for hour := fromHour; hour <= toHour; hour++ {
+		slots = append(slots, fmt.Sprintf("%02d:00", hour))
+	}
+	return slots
+}
+
+func russianMonthName(month time.Month) string {
+	months := []string{"Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"}
+	if month < time.January || month > time.December {
+		return ""
+	}
+	return months[month-1]
 }

@@ -97,6 +97,13 @@ func (h *PosterHandler) HandleDate(ctx context.Context, b *bot.Bot, chatID int64
 		})
 		return
 	}
+	if dateOnly(parsed).Before(dateOnly(time.Now())) {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Нельзя создать мероприятие задним числом. Введите сегодняшнюю или будущую дату:",
+		})
+		return
+	}
 
 	_, data, _ := h.fsm.GetState(telegramID, "admin")
 	data["event_date"] = parsed.Format("2006-01-02")
@@ -200,6 +207,13 @@ func (h *PosterHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, tele
 	price, _ := data["price"].(float64)
 
 	eventDate, _ := time.Parse("2006-01-02", dateStr)
+	if dateOnly(eventDate).Before(dateOnly(time.Now())) {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Нельзя сохранить мероприятие задним числом.",
+		})
+		return
+	}
 
 	event := &db.Event{
 		Title:       title,
@@ -343,4 +357,8 @@ func isValidTime(t string) bool {
 		return false
 	}
 	return h >= 0 && h <= 23 && m >= 0 && m <= 59
+}
+
+func dateOnly(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.Local)
 }

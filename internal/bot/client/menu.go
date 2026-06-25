@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -64,8 +67,14 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 	})
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    chatID,
-		Text:      "\U0001F37D Наше меню:",
+		ChatID: chatID,
+		Text: `🍷 Правила по алкоголю (BYOB)
+Пробковый сбор — 300₽/бутылка. Мы предоставим лед, красивые бокалы и сервис.
+
+🔥 Секретная акция:
+Забронируйте дополнительные услуги прямо сейчас, и мы сделаем скидку 15%. Мы все подготовим к Вашему приходу!
+
+🍽️ Дополнительные услуги:`,
 		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
@@ -110,14 +119,32 @@ func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID 
 		{Text: "\U0001F519 Назад к категориям", CallbackData: "menu_categories"},
 	})
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    chatID,
-		Text:      text,
-		ParseMode: models.ParseModeHTML,
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: keyboard,
-		},
-	})
+	replyMarkup := &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	if cat.ImageURL != "" {
+		var photo models.InputFile = &models.InputFileString{Data: cat.ImageURL}
+		var localFile *os.File
+		if imageURL, err := url.Parse(cat.ImageURL); err == nil {
+			if file, err := os.Open(filepath.Join("uploads", filepath.Base(imageURL.Path))); err == nil {
+				localFile = file
+				photo = &models.InputFileUpload{Filename: filepath.Base(imageURL.Path), Data: file}
+			}
+		}
+		_, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
+			ChatID:      chatID,
+			Photo:       photo,
+			Caption:     text,
+			ParseMode:   models.ParseModeHTML,
+			ReplyMarkup: replyMarkup,
+		})
+		if localFile != nil {
+			localFile.Close()
+		}
+		if err == nil {
+			return
+		}
+		log.Printf("failed to send category cover: %v", err)
+	}
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ParseMode: models.ParseModeHTML, ReplyMarkup: replyMarkup})
 }
 
 func (h *MenuHandler) AddToCart(ctx context.Context, b *bot.Bot, chatID int64, userID uint, menuItemID uint, telegramID int64) {
@@ -128,14 +155,21 @@ func (h *MenuHandler) AddToCart(ctx context.Context, b *bot.Bot, chatID int64, u
 		return
 	}
 
-	h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
-		"cart_" + fmt.Sprint(menuItemID): map[string]interface{}{
-			"item_id": menuItemID,
-			"name":    item.Name,
-			"price":   item.Price,
-			"qty":     1,
-		},
-	})
+	key := "cart_" + fmt.Sprint(menuItemID)
+	_, data, _ := h.fsm.GetState(telegramID, "client")
+	qty := 1
+	if existing, ok := data[key].(map[string]interface{}); ok {
+		if currentQty, ok := existing["qty"].(float64); ok {
+			qty = int(currentQty) + 1
+		}
+	}
+	if err := h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
+		key: map[string]interface{}{"item_id": menuItemID, "name": item.Name, "price": item.Price, "qty": qty},
+	}); err != nil {
+		log.Printf("failed to add item to cart: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
@@ -156,6 +190,10 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 	text := "\U0001F6D2 Ваша корзина:\n\n"
 	var total float64
 	hasItems := false
+	if reservationID, ok := data["reservation_id"].(float64); ok && reservationID > 0 {
+		text += "🔑 Бронирование лофта добавлено к заказу\n"
+		hasItems = true
+	}
 
 	for key, val := range data {
 		if len(key) > 5 && key[:5] == "cart_" {
@@ -178,7 +216,7 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 		return
 	}
 
-	text += fmt.Sprintf("\nИтого за меню: %.0f \u20BD", total)
+	text += fmt.Sprintf("\nИтого за доп. услуги: %.0f \u20BD", total)
 
 	keyboard := [][]models.InlineKeyboardButton{
 		{
@@ -200,6 +238,6 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 func SendErrorMessage(ctx context.Context, b *bot.Bot, chatID int64) {
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:  "\u274C Произошла ошибка. Пожалуйста, попробуйте позже.",
+		Text:   "\u274C Произошла ошибка. Пожалуйста, попробуйте позже.",
 	})
 }

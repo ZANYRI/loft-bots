@@ -15,15 +15,32 @@ services:
       timeout: 5s
       retries: 5
 
-  bots:
+  client-bot:
     build: .
     env_file: .env
     environment:
+      BOT_MODE: client
       DATABASE_URL: postgres://user:pass@postgres:5432/loft_db?sslmode=disable
-      WEBAPP_URL: https://your-domain.com
+      WEBAPP_URL:  https://7802-185-229-190-230.ngrok-free.app
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin-bot:
+    build: .
+    env_file: .env
+    environment:
+      BOT_MODE: admin
+      DATABASE_URL: postgres://user:pass@postgres:5432/loft_db?sslmode=disable
+      WEBAPP_URL:  https://7802-185-229-190-230.ngrok-free.app
       WEBAPP_PORT: "8080"
     ports:
       - "8080:8080"
+    volumes:
+      - uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -31,3 +48,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

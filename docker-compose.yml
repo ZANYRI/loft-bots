@@ -21,7 +21,6 @@ services:
     environment:
       BOT_MODE: client
       DATABASE_URL: postgres://user:pass@postgres:5432/loft_db?sslmode=disable
-      WEBAPP_URL:  https://7802-185-229-190-230.ngrok-free.app
     volumes:
       - uploads:/app/uploads
     depends_on:
@@ -35,7 +34,6 @@ services:
     environment:
       BOT_MODE: admin
       DATABASE_URL: postgres://user:pass@postgres:5432/loft_db?sslmode=disable
-      WEBAPP_URL:  https://7802-185-229-190-230.ngrok-free.app
       WEBAPP_PORT: "8080"
     ports:
       - "8080:8080"

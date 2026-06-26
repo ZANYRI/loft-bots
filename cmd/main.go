@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
@@ -27,6 +28,8 @@ import (
 )
 
 var numRx = regexp.MustCompile(`\d+`)
+
+const telegramPollTimeout = 60 * time.Second
 
 type App struct {
 	gormDB          *gorm.DB
@@ -66,6 +69,10 @@ type clientSpamState struct {
 	LastWarning  time.Time
 }
 
+func newTelegramBot(token string) (*bot.Bot, error) {
+	return bot.New(token, bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramPollTimeout}))
+}
+
 func main() {
 	godotenv.Load()
 
@@ -86,12 +93,12 @@ func main() {
 		log.Fatal("CLIENT_BOT_TOKEN and ADMIN_BOT_TOKEN must be set")
 	}
 
-	clientB, err := bot.New(clientBotToken)
+	clientB, err := newTelegramBot(clientBotToken)
 	if err != nil {
 		log.Fatalf("failed to create client bot: %v", err)
 	}
 
-	adminB, err := bot.New(adminBotToken)
+	adminB, err := newTelegramBot(adminBotToken)
 	if err != nil {
 		log.Fatalf("failed to create admin bot: %v", err)
 	}

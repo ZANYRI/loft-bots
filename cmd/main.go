@@ -72,8 +72,12 @@ type clientSpamState struct {
 	LastWarning  time.Time
 }
 
-func newTelegramBot(token string) (*bot.Bot, error) {
-	return bot.New(token, bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout}))
+func newTelegramBot(token, webhookSecret string) (*bot.Bot, error) {
+	options := []bot.Option{bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout})}
+	if strings.TrimSpace(webhookSecret) != "" {
+		options = append(options, bot.WithWebhookSecretToken(strings.TrimSpace(webhookSecret)))
+	}
+	return bot.New(token, options...)
 }
 
 func main() {
@@ -95,14 +99,26 @@ func main() {
 	if clientBotToken == "" || adminBotToken == "" {
 		log.Fatal("CLIENT_BOT_TOKEN and ADMIN_BOT_TOKEN must be set")
 	}
+
+	telegramMode := strings.ToLower(strings.TrimSpace(os.Getenv("TELEGRAM_MODE")))
+	if telegramMode == "" {
+		telegramMode = "polling"
+	}
+	if telegramMode != "polling" && telegramMode != "webhook" {
+		log.Fatalf("unsupported TELEGRAM_MODE %q, expected polling or webhook", telegramMode)
+	}
+	log.Printf("Telegram mode: %s", telegramMode)
 	log.Printf("Telegram polling configured: poll_timeout=%s http_timeout=%s", telegramPollTimeout, telegramHTTPTimeout)
 
-	clientB, err := newTelegramBot(clientBotToken)
+	clientWebhookSecret := os.Getenv("CLIENT_WEBHOOK_SECRET")
+	adminWebhookSecret := os.Getenv("ADMIN_WEBHOOK_SECRET")
+
+	clientB, err := newTelegramBot(clientBotToken, clientWebhookSecret)
 	if err != nil {
 		log.Fatalf("failed to create client bot: %v", err)
 	}
 
-	adminB, err := newTelegramBot(adminBotToken)
+	adminB, err := newTelegramBot(adminBotToken, adminWebhookSecret)
 	if err != nil {
 		log.Fatalf("failed to create admin bot: %v", err)
 	}
@@ -126,39 +142,95 @@ func main() {
 	defer cancel()
 
 	log.Printf("Starting in %s mode...", botMode)
-	if botMode == "client" || botMode == "all" {
-		go app.startReviewScheduler(ctx, clientB)
-		go app.startReservationBalanceScheduler(ctx, clientB)
-		go app.startReservationStartReminderScheduler(ctx, clientB)
-		go clientB.Start(ctx)
-	}
-	if botMode == "admin" || botMode == "all" {
-		go adminB.Start(ctx)
-
+	if telegramMode == "webhook" {
+		if botMode != "all" {
+			log.Fatal("TELEGRAM_MODE=webhook requires BOT_MODE=all so both bot webhooks are served by one HTTP server")
+		}
+		webAppURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_URL")), "/")
+		if webAppURL == "" {
+			log.Fatal("WEBAPP_URL must be set for TELEGRAM_MODE=webhook")
+		}
 		webPort := os.Getenv("WEBAPP_PORT")
 		if webPort == "" {
 			webPort = "8080"
 		}
 
-		ws := web.NewServer(
-			webPort, adminBotToken, clientB,
-			app.userRepo, app.eventRepo, app.orderRepo,
-			app.reservationRepo, app.settingsRepo,
-			app.rentalPriceRepo, app.menuCatRepo, app.menuItemRepo,
-			app.expenseRepo,
-			app.discountRepo,
-			app.reviewRepo,
-		)
+		go app.startReviewScheduler(ctx, clientB)
+		go app.startReservationBalanceScheduler(ctx, clientB)
+		go app.startReservationStartReminderScheduler(ctx, clientB)
 
+		ws := app.newWebServer(webPort, adminBotToken, clientB)
+		clientWebhookPath := "/telegram/webhook/client"
+		adminWebhookPath := "/telegram/webhook/admin"
+		ws.Handle(clientWebhookPath, clientB.WebhookHandler())
+		ws.Handle(adminWebhookPath, adminB.WebhookHandler())
+
+		setupWebhook(ctx, clientB, "client", webAppURL+clientWebhookPath, clientWebhookSecret)
+		setupWebhook(ctx, adminB, "admin", webAppURL+adminWebhookPath, adminWebhookSecret)
+		go clientB.StartWebhook(ctx)
+		go adminB.StartWebhook(ctx)
 		go func() {
 			if err := ws.Start(); err != nil {
 				log.Printf("web server error: %v", err)
 			}
 		}()
+	} else {
+		if botMode == "client" || botMode == "all" {
+			deleteWebhook(ctx, clientB, "client")
+			go app.startReviewScheduler(ctx, clientB)
+			go app.startReservationBalanceScheduler(ctx, clientB)
+			go app.startReservationStartReminderScheduler(ctx, clientB)
+			go clientB.Start(ctx)
+		}
+		if botMode == "admin" || botMode == "all" {
+			deleteWebhook(ctx, adminB, "admin")
+			go adminB.Start(ctx)
+
+			webPort := os.Getenv("WEBAPP_PORT")
+			if webPort == "" {
+				webPort = "8080"
+			}
+
+			ws := app.newWebServer(webPort, adminBotToken, clientB)
+			go func() {
+				if err := ws.Start(); err != nil {
+					log.Printf("web server error: %v", err)
+				}
+			}()
+		}
 	}
 
 	<-ctx.Done()
 	log.Println("Shutting down...")
+}
+
+func (app *App) newWebServer(webPort, adminBotToken string, clientB *bot.Bot) *web.Server {
+	return web.NewServer(
+		webPort, adminBotToken, clientB,
+		app.userRepo, app.eventRepo, app.orderRepo,
+		app.reservationRepo, app.settingsRepo,
+		app.rentalPriceRepo, app.menuCatRepo, app.menuItemRepo,
+		app.expenseRepo,
+		app.discountRepo,
+		app.reviewRepo,
+	)
+}
+
+func setupWebhook(ctx context.Context, b *bot.Bot, name, webhookURL, secret string) {
+	params := &bot.SetWebhookParams{URL: webhookURL}
+	if strings.TrimSpace(secret) != "" {
+		params.SecretToken = strings.TrimSpace(secret)
+	}
+	if _, err := b.SetWebhook(ctx, params); err != nil {
+		log.Fatalf("failed to set %s webhook: %v", name, err)
+	}
+	log.Printf("%s webhook set: %s", name, webhookURL)
+}
+
+func deleteWebhook(ctx context.Context, b *bot.Bot, name string) {
+	if _, err := b.DeleteWebhook(ctx, &bot.DeleteWebhookParams{}); err != nil {
+		log.Printf("failed to delete %s webhook before polling: %v", name, err)
+	}
 }
 
 func (app *App) initRepositories(gormDB *gorm.DB) {

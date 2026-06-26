@@ -118,6 +118,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleStatic)
 }
 
+func (s *Server) Handle(pattern string, handler http.Handler) {
+	s.mux.Handle(pattern, handler)
+}
+
 func (s *Server) Start() error {
 	addr := ":" + s.port
 	log.Printf("web server starting on %s", addr)

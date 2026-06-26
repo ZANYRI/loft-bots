@@ -31,7 +31,7 @@ var numRx = regexp.MustCompile(`\d+`)
 
 const (
 	telegramPollTimeout = 60 * time.Second
-	telegramHTTPTimeout = 70 * time.Second
+	telegramHTTPTimeout = 120 * time.Second
 )
 
 type App struct {
@@ -353,7 +353,9 @@ func (app *App) handleClientStart(ctx context.Context, b *bot.Bot, update *model
 	telegramID := update.Message.From.ID
 	username := update.Message.From.Username
 
-	app.userRepo.FindOrCreate(telegramID, username)
+	if _, err := app.userRepo.FindOrCreate(telegramID, username); err != nil {
+		log.Printf("failed to create/find client user: telegram_id=%d err=%v", telegramID, err)
+	}
 	app.showClientMainMenu(ctx, b, chatID)
 }
 
@@ -403,7 +405,9 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 		}
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ReplyMarkup: replyMarkup})
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ReplyMarkup: replyMarkup}); err != nil {
+		log.Printf("failed to send client main menu: chat_id=%d err=%v", chatID, err)
+	}
 }
 
 func (app *App) settingValue(key, fallback string) string {

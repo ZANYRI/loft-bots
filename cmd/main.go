@@ -30,8 +30,8 @@ import (
 var numRx = regexp.MustCompile(`\d+`)
 
 const (
-	telegramPollTimeout = 60 * time.Second
-	telegramHTTPTimeout = 120 * time.Second
+	telegramPollTimeout = 25 * time.Second
+	telegramHTTPTimeout = 35 * time.Second
 )
 
 type App struct {

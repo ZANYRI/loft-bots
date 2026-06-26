@@ -105,7 +105,7 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 
 	menuTotal := h.calculateMenuTotal(data)
 	if menuTotal > 0 {
-		text += "\U0001F37D Дополнительные услуги:\n"
+		text += "\U0001F37D Доп. Услуги и Меню:\n"
 		for key, val := range data {
 			if len(key) <= 5 || key[:5] != "cart_" {
 				continue
@@ -126,6 +126,16 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 	text += fmt.Sprintf("\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001F4B0 Итого: %.0f \u20BD\n\n", totalPrice)
 	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на номер:\n%s\nТ-Банк, Кирилл П.\n\n", paymentPhone)
 	text += "После оплаты отправьте фото или PDF-чек одним сообщением. \U0001F447"
+	if _, isTicket := data["event_id"]; !isTicket {
+		depositStr := "0"
+		if setting, err := h.settingsRepo.Get("deposit_amount"); err == nil {
+			depositStr = setting.Value
+		}
+		depositVal, _ := strconv.ParseFloat(depositStr, 64)
+		if depositVal > 0 {
+			text += fmt.Sprintf("\n\n\U0001F512 Залог: %.0f \u20BD (возвращается после уборки)", depositVal)
+		}
+	}
 
 	keyboard := [][]models.InlineKeyboardButton{
 		{
@@ -236,7 +246,7 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 
 	h.fsm.ClearState(telegramID, "client")
 
-	pendingMessage := h.settingValue("message_after_payment", "✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽.")
+	pendingMessage := h.settingValue("message_after_payment", "✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.")
 	depositAmount := h.settingValue("deposit_amount", "0")
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
@@ -261,10 +271,24 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 			b.SendMessage(context.Background(), &bot.SendMessageParams{ChatID: chatID, Text: renderMessage(delayedMessage, map[string]string{"cork_fee": corkFee})})
 		}()
 	}
-	dueAt := reviewDueAt(h.settingInt("message_review_day_offset", 1), h.settingValue("message_review_next_day_time", "12:00"))
+	dueAt := reviewDueAtAfter(h.reviewBaseTime(eventID, reservationID), h.settingInt("message_review_day_offset", 1), h.settingValue("message_review_next_day_time", "12:00"))
 	if err := h.orderRepo.SetReviewDueAt(order.ID, dueAt); err != nil {
 		log.Printf("failed to set review due time: order_id=%d err=%v", order.ID, err)
 	}
+}
+
+func (h *PaymentHandler) reviewBaseTime(eventID, reservationID *uint) time.Time {
+	if eventID != nil {
+		if event, err := h.eventRepo.GetByID(*eventID); err == nil {
+			return endDateTime(event.EventDate, event.TimeFrom, event.TimeTo)
+		}
+	}
+	if reservationID != nil {
+		if reservation, err := h.reservationRepo.GetByID(*reservationID); err == nil {
+			return endDateTime(reservation.Date, reservation.TimeFrom, reservation.TimeTo)
+		}
+	}
+	return time.Now()
 }
 
 func (h *PaymentHandler) RequestReceipt(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
@@ -274,9 +298,22 @@ func (h *PaymentHandler) RequestReceipt(ctx context.Context, b *bot.Bot, chatID 
 		return
 	}
 	h.fsm.SetState(telegramID, "client", "payment:receipt", data)
+
+	text := "Пожалуйста, отправьте фото или скриншот чека одним сообщением. После этого заказ будет передан администратору на подтверждение."
+	if _, isTicket := data["event_id"]; !isTicket {
+		depositStr := "0"
+		if setting, err := h.settingsRepo.Get("deposit_amount"); err == nil {
+			depositStr = setting.Value
+		}
+		depositVal, _ := strconv.ParseFloat(depositStr, 64)
+		if depositVal > 0 {
+			text += fmt.Sprintf("\n\n\U0001F512 Залог: %.0f \u20BD (возвращается после уборки)", depositVal)
+		}
+	}
+
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "Пожалуйста, отправьте фото или скриншот чека одним сообщением. После этого заказ будет передан администратору на подтверждение.",
+		Text:   text,
 	})
 }
 
@@ -311,6 +348,10 @@ func (h *PaymentHandler) settingInt(key string, fallback int) int {
 }
 
 func reviewDueAt(dayOffset int, nextDayTime string) time.Time {
+	return reviewDueAtAfter(time.Now(), dayOffset, nextDayTime)
+}
+
+func reviewDueAtAfter(base time.Time, dayOffset int, nextDayTime string) time.Time {
 	now := time.Now()
 	if dayOffset < 0 {
 		dayOffset = 1
@@ -325,11 +366,21 @@ func reviewDueAt(dayOffset int, nextDayTime string) time.Time {
 			minute = m
 		}
 	}
-	target := time.Date(now.Year(), now.Month(), now.Day()+dayOffset, hour, minute, 0, 0, now.Location())
+	target := time.Date(base.Year(), base.Month(), base.Day(), hour, minute, 0, 0, base.Location()).AddDate(0, 0, dayOffset)
 	if !target.After(now) {
-		target = target.Add(24 * time.Hour)
+		target = time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location()).AddDate(0, 0, 1)
 	}
 	return target
+}
+
+func endDateTime(date time.Time, timeFrom, timeTo string) time.Time {
+	startMinutes := minutesOfDay(timeFrom)
+	endMinutes := minutesOfDay(timeTo)
+	endDate := dateOnly(date)
+	if endMinutes <= startMinutes {
+		endDate = endDate.AddDate(0, 0, 1)
+	}
+	return endDate.Add(time.Duration(endMinutes) * time.Minute)
 }
 
 func renderMessage(template string, values map[string]string) string {

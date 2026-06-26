@@ -71,7 +71,7 @@ func (h *StatsHandler) ShowPeriod(ctx context.Context, b *bot.Bot, chatID int64,
 	rentalsRevenue, _ := stats["rentals_revenue"].(float64)
 	menuRevenue, _ := stats["menu_revenue"].(float64)
 
-	text := fmt.Sprintf("\U0001F4CA Статистика за %s\n\n\U0001F4B0 Общий доход: %.0f \u20BD\n   \u251C Билеты: %.0f \u20BD\n   \u251C Бронирования: %.0f \u20BD\n   \u2514 Меню: %.0f \u20BD\n\n\U0001F4E6 Заказов всего: %d\n   \u251C Подтверждено: %d\n   \u251C Ожидает: %d\n   \u2514 Отменено: %d\n\n\U0001F464 Уникальных клиентов: %d",
+	text := fmt.Sprintf("\U0001F4CA Статистика за %s\n\n\U0001F4B0 Общий доход: %.0f \u20BD\n   \u251C Билеты: %.0f \u20BD\n   \u251C Бронирования: %.0f \u20BD\n   \u2514 Доп. Услуги и Меню: %.0f \u20BD\n\n\U0001F4E6 Заказов всего: %d\n   \u251C Подтверждено: %d\n   \u251C Ожидает: %d\n   \u2514 Отменено: %d\n\n\U0001F464 Уникальных клиентов: %d",
 		periodLabel[period], totalRevenue, ticketsRevenue, rentalsRevenue, menuRevenue,
 		totalOrders, confirmed, pending, cancelled, uniqueUsers)
 

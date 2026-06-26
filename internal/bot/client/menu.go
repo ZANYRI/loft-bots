@@ -74,7 +74,7 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 🔥 Секретная акция:
 Забронируйте дополнительные услуги прямо сейчас, и мы сделаем скидку 15%. Мы все подготовим к Вашему приходу!
 
-🍽️ Дополнительные услуги:`,
+🍽️ Доп. Услуги и Меню:`,
 		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,

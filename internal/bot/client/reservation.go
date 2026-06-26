@@ -455,14 +455,14 @@ func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int
 func (h *ReservationHandler) PromptMenuOrPayment(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	keyboard := [][]models.InlineKeyboardButton{
 		{
-			{Text: "\U0001F355 Посмотреть доп. услуги", CallbackData: "menu_categories"},
-			{Text: "\u27A1 Продолжить без доп. услуг", CallbackData: "go_to_payment"},
+			{Text: "\U0001F355 Посмотреть Меню", CallbackData: "menu_categories"},
+			{Text: "\u27A1 Продолжить без Меню", CallbackData: "go_to_payment"},
 		},
 	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "\U0001F37D Хотите добавить дополнительные услуги к вашему заказу?",
+		Text:   "\U0001F37D Хотите добавить Меню к вашему заказу?",
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},

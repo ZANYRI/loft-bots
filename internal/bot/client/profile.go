@@ -68,7 +68,7 @@ func (h *ProfileHandler) Show(ctx context.Context, b *bot.Bot, chatID int64, tel
 			}
 
 			if order.MenuTotal > 0 {
-				orderType += " + \U0001F37D Меню"
+				orderType += " + \U0001F37D Доп. Услуги и Меню"
 			}
 
 			text += fmt.Sprintf("#%05d | %s\n", order.ID, orderType)

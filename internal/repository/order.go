@@ -74,7 +74,7 @@ func (r *OrderRepo) GetDueReviewRequests(now time.Time) ([]db.Order, error) {
 	var orders []db.Order
 	err := r.db.Preload("User").
 		Where("review_due_at IS NOT NULL AND review_due_at <= ? AND review_sent_at IS NULL", now).
-		Where("status NOT IN ?", []string{"cancelled", "refunded"}).
+		Where("status IN ?", []string{"confirmed", "prepaid"}).
 		Order("review_due_at ASC").
 		Find(&orders).Error
 	return orders, err

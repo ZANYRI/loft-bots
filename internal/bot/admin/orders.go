@@ -161,7 +161,7 @@ func (h *OrdersHandler) ShowNewOrders(ctx context.Context, b *bot.Bot, chatID in
 
 	text := fmt.Sprintf("\U0001F514 Новых заказов: %d\n\n", len(orders))
 	for _, o := range orders {
-		orderType := "\U0001F37D Меню"
+		orderType := "\U0001F37D Доп. Услуги и Меню"
 		if o.EventID != nil {
 			orderType = "\U0001F39F Билет"
 		} else if o.ReservationID != nil {

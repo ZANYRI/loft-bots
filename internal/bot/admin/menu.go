@@ -184,7 +184,7 @@ func (h *MenuHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) {
 		catMap[c.ID] = c
 	}
 
-	text := "\U0001F4CB Меню \u2014 все позиции:\n\n"
+	text := "\U0001F4CB Доп. Услуги и Меню \u2014 все позиции:\n\n"
 	currentCat := uint(0)
 	for _, item := range items {
 		if item.CategoryID != currentCat {

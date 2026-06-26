@@ -364,7 +364,7 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 			{Text: "\U0001F511 Забронировать лофт", CallbackData: "reservation_start"},
 		},
 		{
-			{Text: "\U0001F37D Дополнительные услуги", CallbackData: "menu_categories"},
+			{Text: "\U0001F37D Доп. Услуги и Меню", CallbackData: "menu_categories"},
 		},
 		{
 			{Text: "\U0001F6D2 Корзина", CallbackData: "menu_cart"},
@@ -749,7 +749,7 @@ func (app *App) canUseMenu(ctx context.Context, b *bot.Bot, chatID int64, telegr
 		return true
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Дополнительные услуги можно заказать после покупки билета на активное мероприятие или при наличии брони в ближайшее время."})
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Доп. Услуги и Меню можно заказать после покупки билета на активное мероприятие или при наличии брони в ближайшее время."})
 	return false
 }
 
@@ -889,7 +889,7 @@ func (app *App) showAdminMainMenu(ctx context.Context, b *bot.Bot, chatID int64)
 			{Text: "\U0001F3AD Управление афишей", CallbackData: "admin_poster"},
 		},
 		[]models.InlineKeyboardButton{
-			{Text: "\U0001F37D Дополнительные услуги", CallbackData: "admin_menu"},
+			{Text: "\U0001F37D Доп. Услуги и Меню", CallbackData: "admin_menu"},
 		},
 		[]models.InlineKeyboardButton{
 			{Text: "\U0001F4B0 Цены на аренду", CallbackData: "admin_pricing"},

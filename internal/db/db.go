@@ -43,9 +43,9 @@ func Connect(dsn string) *gorm.DB {
 		"⏰ До начала вашей брони осталось 30 минут. Ждём вас {date} в {time_from}.",
 	)
 	db.Exec(`UPDATE settings SET value = ? WHERE key = ? AND value = ?`,
-		"✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽.",
-		"message_after_payment",
 		"✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.",
+		"message_after_payment",
+		"✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽.",
 	)
 
 	seedDefaults(db)
@@ -146,7 +146,7 @@ func seedDefaults(db *gorm.DB) {
 		{Key: "message_reservation_reminder_60", Value: "⏰ До начала вашей брони остался 1 час. Ждём вас {date} в {time_from}."},
 		{Key: "message_reservation_reminder_30", Value: "⏰ До конца вашей брони осталось 30 минут. Время окончания: {time_to}."},
 		{Key: "message_reservation_balance_due", Value: "⏰ Ваша бронь началась. Осталось оплатить {amount} ₽ из общей суммы {total} ₽."},
-		{Key: "message_after_payment", Value: "✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽."},
+		{Key: "message_after_payment", Value: "✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением."},
 		{Key: "offer_pdf_url", Value: ""},
 		{Key: "deposit_amount", Value: "0"},
 		{Key: "message_review_day_offset", Value: "1"},

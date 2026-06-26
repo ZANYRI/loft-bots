@@ -29,7 +29,10 @@ import (
 
 var numRx = regexp.MustCompile(`\d+`)
 
-const telegramPollTimeout = 60 * time.Second
+const (
+	telegramPollTimeout = 60 * time.Second
+	telegramHTTPTimeout = 70 * time.Second
+)
 
 type App struct {
 	gormDB          *gorm.DB
@@ -70,7 +73,7 @@ type clientSpamState struct {
 }
 
 func newTelegramBot(token string) (*bot.Bot, error) {
-	return bot.New(token, bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramPollTimeout}))
+	return bot.New(token, bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout}))
 }
 
 func main() {

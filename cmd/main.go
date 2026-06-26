@@ -95,6 +95,7 @@ func main() {
 	if clientBotToken == "" || adminBotToken == "" {
 		log.Fatal("CLIENT_BOT_TOKEN and ADMIN_BOT_TOKEN must be set")
 	}
+	log.Printf("Telegram polling configured: poll_timeout=%s http_timeout=%s", telegramPollTimeout, telegramHTTPTimeout)
 
 	clientB, err := newTelegramBot(clientBotToken)
 	if err != nil {

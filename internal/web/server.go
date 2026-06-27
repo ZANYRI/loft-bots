@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"loft-bots/internal/db"
@@ -49,6 +50,13 @@ type Server struct {
 	uploadDir       string
 	webAppURL       string
 	mux             *http.ServeMux
+	browserLinks    map[string]browserLink
+	browserLinksMu  sync.Mutex
+}
+
+type browserLink struct {
+	userID    int64
+	expiresAt time.Time
 }
 
 func NewServer(
@@ -84,6 +92,7 @@ func NewServer(
 		uploadDir:       "uploads",
 		webAppURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_URL")), "/"),
 		mux:             http.NewServeMux(),
+		browserLinks:    make(map[string]browserLink),
 	}
 	s.routes()
 	return s
@@ -91,6 +100,8 @@ func NewServer(
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/verify", s.handleVerify)
+	s.mux.HandleFunc("/api/admin/browser-link", s.withAuth(s.handleBrowserLink))
+	s.mux.HandleFunc("/browser-auth", s.handleBrowserAuth)
 	s.mux.HandleFunc("/api/admin/events", s.withAuth(s.handleEvents))
 	s.mux.HandleFunc("/api/admin/events/", s.withAuth(s.handleEventByID))
 	s.mux.HandleFunc("/api/admin/menu/items", s.withAuth(s.handleMenuItems))
@@ -152,7 +163,7 @@ func (s *Server) verifyInitData(r *http.Request) (int64, bool) {
 
 	initData := r.Header.Get("X-Telegram-Init-Data")
 	if initData == "" {
-		return 0, false
+		return s.verifyBrowserSession(r)
 	}
 
 	vals, err := url.ParseQuery(initData)
@@ -199,6 +210,93 @@ func (s *Server) verifyInitData(r *http.Request) (int64, bool) {
 	return user.ID, user.ID != 0
 }
 
+const browserSessionCookie = "loft_admin_session"
+
+func (s *Server) sessionSignature(value string) string {
+	h := hmac.New(sha256.New, []byte(s.botToken))
+	h.Write([]byte("browser-session:" + value))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Server) verifyBrowserSession(r *http.Request) (int64, bool) {
+	cookie, err := r.Cookie(browserSessionCookie)
+	if err != nil {
+		return 0, false
+	}
+	parts := strings.Split(cookie.Value, ".")
+	if len(parts) != 3 {
+		return 0, false
+	}
+	unsigned := parts[0] + "." + parts[1]
+	if !hmac.Equal([]byte(parts[2]), []byte(s.sessionSignature(unsigned))) {
+		return 0, false
+	}
+	userID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	expires, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || time.Now().Unix() >= expires {
+		return 0, false
+	}
+	return userID, userID != 0
+}
+
+func isAdmin(userID int64) bool {
+	for _, id := range getAdminIDs() {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) handleBrowserLink(w http.ResponseWriter, r *http.Request, userID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	raw := make([]byte, 32)
+	if _, err := cryptorand.Read(raw); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create browser link"})
+		return
+	}
+	token := hex.EncodeToString(raw)
+	s.browserLinksMu.Lock()
+	for key, link := range s.browserLinks {
+		if time.Now().After(link.expiresAt) {
+			delete(s.browserLinks, key)
+		}
+	}
+	s.browserLinks[token] = browserLink{userID: userID, expiresAt: time.Now().Add(2 * time.Minute)}
+	s.browserLinksMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]string{"url": "/browser-auth?token=" + token})
+}
+
+func (s *Server) handleBrowserAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	s.browserLinksMu.Lock()
+	link, ok := s.browserLinks[token]
+	delete(s.browserLinks, token)
+	s.browserLinksMu.Unlock()
+	if !ok || time.Now().After(link.expiresAt) || !isAdmin(link.userID) {
+		http.Error(w, "Ссылка недействительна или устарела", http.StatusUnauthorized)
+		return
+	}
+	expires := time.Now().Add(30 * 24 * time.Hour)
+	unsigned := strconv.FormatInt(link.userID, 10) + "." + strconv.FormatInt(expires.Unix(), 10)
+	http.SetCookie(w, &http.Cookie{
+		Name: browserSessionCookie, Value: unsigned + "." + s.sessionSignature(unsigned),
+		Path: "/", Expires: expires, MaxAge: 30 * 24 * 60 * 60,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 		data, err := adminFiles.ReadFile("admin/index.html")
@@ -224,15 +322,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authorized := false
-	for _, id := range getAdminIDs() {
-		if id == userID {
-			authorized = true
-			break
-		}
-	}
-
-	if !authorized {
+	if !isAdmin(userID) {
 		writeJSON(w, 403, map[string]string{"error": "forbidden"})
 		return
 	}
@@ -263,6 +353,10 @@ func (s *Server) withAuth(fn authHandler) http.HandlerFunc {
 		userID, ok := s.verifyInitData(r)
 		if !ok {
 			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if !isAdmin(userID) {
+			writeJSON(w, 403, map[string]string{"error": "forbidden"})
 			return
 		}
 		fn(w, r, userID)

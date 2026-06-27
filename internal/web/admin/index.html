@@ -88,10 +88,13 @@ const TG = (window.Telegram && window.Telegram.WebApp) || {
 TG.expand();
 TG.enableClosingConfirmation();
 
-function openInBrowser(){
-  const url=window.location.href;
-  if(typeof TG.openLink==='function')TG.openLink(url);
-  else window.open(url,'_blank','noopener');
+async function openInBrowser(){
+  try{
+    const result=await api('POST','/browser-link');
+    const url=new URL(result.url,window.location.origin).href;
+    if(typeof TG.openLink==='function')TG.openLink(url);
+    else window.open(url,'_blank','noopener');
+  }catch(e){showToast('Не удалось открыть браузер: '+e.message)}
 }
 
 const API_BASE = '';
@@ -161,7 +164,7 @@ async function api(method, path, body){
 async function init(){
   try{
     token = TG.initData;
-    if(!token){showToast('DEV_MODE: вход без Telegram (браузер)');token='dev'}
+    if(!token){showToast('Вход через браузер')}
     const v = await api('POST','/verify');
     if(!v.ok){showToast('Нет доступа');return}
     renderNav();

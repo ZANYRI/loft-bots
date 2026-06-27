@@ -63,6 +63,12 @@ Thumbs.db
 # Other
 node_modules/
 
+# Go build cache
+.gocache/
+
+# Local binaries
+/loft-bots-linux-amd64
+
 # Databases
 *.db
 *.sqlite

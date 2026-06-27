@@ -66,6 +66,17 @@ func (f *FSM) UpdateData(telegramID int64, bot string, data map[string]interface
 	return f.SetState(telegramID, bot, currentState, existingData)
 }
 
+func (f *FSM) DeleteData(telegramID int64, bot string, keys ...string) error {
+	currentState, existingData, err := f.GetState(telegramID, bot)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		delete(existingData, key)
+	}
+	return f.SetState(telegramID, bot, currentState, existingData)
+}
+
 func (f *FSM) ClearState(telegramID int64, bot string) error {
 	return f.db.Where("telegram_id = ? AND bot = ?", telegramID, bot).Delete(&db.UserState{}).Error
 }

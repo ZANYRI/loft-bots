@@ -177,6 +177,36 @@ func (h *MenuHandler) AddToCart(ctx context.Context, b *bot.Bot, chatID int64, u
 	})
 }
 
+func (h *MenuHandler) RemoveFromCart(ctx context.Context, b *bot.Bot, chatID int64, menuItemID uint, telegramID int64) {
+	key := "cart_" + fmt.Sprint(menuItemID)
+	_, data, err := h.fsm.GetState(telegramID, "client")
+	if err != nil {
+		h.ShowCart(ctx, b, chatID, telegramID)
+		return
+	}
+	item, ok := data[key].(map[string]interface{})
+	if !ok {
+		h.ShowCart(ctx, b, chatID, telegramID)
+		return
+	}
+	qty, _ := item["qty"].(float64)
+	if qty <= 1 {
+		if err := h.fsm.DeleteData(telegramID, "client", key); err != nil {
+			log.Printf("failed to remove cart item: %v", err)
+			SendErrorMessage(ctx, b, chatID)
+			return
+		}
+	} else {
+		item["qty"] = qty - 1
+		if err := h.fsm.UpdateData(telegramID, "client", map[string]interface{}{key: item}); err != nil {
+			log.Printf("failed to decrease cart item: %v", err)
+			SendErrorMessage(ctx, b, chatID)
+			return
+		}
+	}
+	h.ShowCart(ctx, b, chatID, telegramID)
+}
+
 func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "client")
 	if err != nil {
@@ -190,6 +220,7 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 	text := "\U0001F6D2 Ваша корзина:\n\n"
 	var total float64
 	hasItems := false
+	removeButtons := make([][]models.InlineKeyboardButton, 0)
 	if reservationID, ok := data["reservation_id"].(float64); ok && reservationID > 0 {
 		text += "🔑 Бронирование лофта добавлено к заказу\n"
 		hasItems = true
@@ -197,14 +228,22 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 
 	for key, val := range data {
 		if len(key) > 5 && key[:5] == "cart_" {
-			item := val.(map[string]interface{})
-			name := item["name"].(string)
-			price := item["price"].(float64)
-			qty := int(item["qty"].(float64))
+			item, ok := val.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := item["name"].(string)
+			price, _ := item["price"].(float64)
+			qtyValue, _ := item["qty"].(float64)
+			qty := int(qtyValue)
+			if name == "" || qty <= 0 {
+				continue
+			}
 			subtotal := price * float64(qty)
 			total += subtotal
 			hasItems = true
 			text += fmt.Sprintf("\u2022 %s \u00d7 %d \u2014 %.0f \u20BD\n", name, qty, subtotal)
+			removeButtons = append(removeButtons, []models.InlineKeyboardButton{{Text: "➖ " + name, CallbackData: "menu_remove_" + fmt.Sprint(item["item_id"])}})
 		}
 	}
 
@@ -212,18 +251,20 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "\U0001F6D2 Ваша корзина пуста",
+			ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "➕ Добавить товары", CallbackData: "menu_categories"}},
+				{{Text: "🏠 Главное меню", CallbackData: "main_menu"}},
+			}},
 		})
 		return
 	}
 
 	text += fmt.Sprintf("\nИтого за доп. услуги: %.0f \u20BD", total)
 
-	keyboard := [][]models.InlineKeyboardButton{
-		{
-			{Text: "\u2795 Добавить ещё", CallbackData: "menu_categories"},
-			{Text: "\u2705 Готово", CallbackData: "menu_checkout"},
-		},
-	}
+	keyboard := append(removeButtons, []models.InlineKeyboardButton{
+		{Text: "\u2795 Добавить ещё", CallbackData: "menu_categories"},
+		{Text: "\u2705 Готово", CallbackData: "menu_checkout"},
+	})
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,

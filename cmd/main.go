@@ -766,6 +766,13 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 			}
 		}
 
+	case strings.HasPrefix(data, "menu_remove_"):
+		parts := strings.Split(data, "_")
+		if len(parts) >= 3 {
+			itemID, _ := strconv.ParseUint(parts[2], 10, 64)
+			app.clientMenuHandler.RemoveFromCart(ctx, b, chatID, uint(itemID), telegramID)
+		}
+
 	case data == "menu_cart":
 		app.clientMenuHandler.ShowCart(ctx, b, chatID, telegramID)
 

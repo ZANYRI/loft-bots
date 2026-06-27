@@ -69,7 +69,7 @@ h2{font-size:17px;font-weight:700;letter-spacing:-.15px;margin:22px 0 10px}
 </head>
 <body>
 <div id="app" class="hidden">
-  <header class="page-header"><h1 id="pageTitle">Панель управления</h1><button class="open-browser" type="button" onclick="openInBrowser()">↗ В браузере</button></header>
+  <header class="page-header"><h1 id="pageTitle">Панель управления</h1><a class="open-browser" id="openBrowserLink" href="#" target="_blank" rel="noopener" onclick="return openInBrowser(event)">↗ В браузере</a></header>
   <div class="tabs" id="navTabs"></div>
   <div id="pageContent"></div>
 </div>
@@ -93,15 +93,16 @@ async function prepareBrowserLink(){
   try{
     const result=await api('POST','/browser-link');
     preparedBrowserURL=new URL(result.url,window.location.origin).href;
+    const link=document.getElementById('openBrowserLink');
+    if(link)link.href=preparedBrowserURL;
   }catch(e){preparedBrowserURL=''}
 }
-function openInBrowser(){
-  if(!preparedBrowserURL){showToast('Ссылка готовится, нажмите ещё раз');prepareBrowserLink();return}
-  const url=preparedBrowserURL;
+function openInBrowser(event){
+  if(!preparedBrowserURL){event.preventDefault();showToast('Ссылка готовится, нажмите ещё раз');prepareBrowserLink();return false}
   preparedBrowserURL='';
-  if(typeof TG.openLink==='function')TG.openLink(url);
-  else window.open(url,'_blank','noopener');
-  setTimeout(prepareBrowserLink,1000);
+  const link=document.getElementById('openBrowserLink');
+  setTimeout(()=>{if(link)link.href='#';prepareBrowserLink()},1000);
+  return true;
 }
 
 const API_BASE = '';

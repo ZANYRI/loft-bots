@@ -92,6 +92,20 @@ func (r *ReservationRepo) Cancel(id uint) error {
 	return r.UpdateStatus(id, "cancelled")
 }
 
+func (r *ReservationRepo) UpdateDetails(reservation *db.Reservation) error {
+	return r.db.Model(&db.Reservation{}).Where("id = ?", reservation.ID).Updates(map[string]interface{}{
+		"user_id":        reservation.UserID,
+		"date":           reservation.Date,
+		"time_from":      reservation.TimeFrom,
+		"time_to":        reservation.TimeTo,
+		"day_type":       reservation.DayType,
+		"price_per_hour": reservation.PricePerHour,
+		"total_price":    reservation.TotalPrice,
+		"paid_amount":    reservation.PaidAmount,
+		"status":         reservation.Status,
+	}).Error
+}
+
 func (r *ReservationRepo) GetDueBalanceReminders(now time.Time) ([]db.Reservation, error) {
 	var reservations []db.Reservation
 	err := r.db.Preload("User").

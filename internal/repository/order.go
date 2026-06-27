@@ -173,6 +173,28 @@ func (r *OrderRepo) GetStats(period string, from, to *time.Time) (map[string]int
 		stats[rbt.Type+"_revenue"] = rbt.Total
 	}
 
+	manualQuery := r.db.Model(&db.Reservation{}).
+		Where("user_id IS NULL AND status != ?", "cancelled")
+	if from != nil {
+		manualQuery = manualQuery.Where("date >= ?", from.Format("2006-01-02"))
+	} else if period == "today" {
+		manualQuery = manualQuery.Where("date = ?", now.Format("2006-01-02"))
+	} else if period == "week" {
+		manualQuery = manualQuery.Where("date >= ?", now.AddDate(0, 0, -7).Format("2006-01-02"))
+	} else if period == "month" {
+		manualQuery = manualQuery.Where("date >= ?", now.AddDate(0, -1, 0).Format("2006-01-02"))
+	}
+	if to != nil {
+		manualQuery = manualQuery.Where("date <= ?", to.Format("2006-01-02"))
+	}
+	var manualRevenue float64
+	if err := manualQuery.Select("COALESCE(SUM(paid_amount), 0)").Scan(&manualRevenue).Error; err != nil {
+		return nil, err
+	}
+	stats["total_revenue"] = result.TotalRevenue + manualRevenue
+	rentalRevenue, _ := stats["rentals_revenue"].(float64)
+	stats["rentals_revenue"] = rentalRevenue + manualRevenue
+
 	return stats, nil
 }
 

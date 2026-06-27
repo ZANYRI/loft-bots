@@ -81,6 +81,7 @@ type Reservation struct {
 	DayType               string     `gorm:"size:10;not null"`
 	PricePerHour          float64    `gorm:"type:decimal(10,2);not null"`
 	TotalPrice            float64    `gorm:"type:decimal(10,2);not null"`
+	PaidAmount            float64    `gorm:"type:decimal(10,2);not null;default:0"`
 	Status                string     `gorm:"size:20;default:pending"`
 	Reminder60SentAt      *time.Time `gorm:"column:reminder_60_sent_at;index"`
 	Reminder30SentAt      *time.Time `gorm:"column:reminder_30_sent_at;index"`

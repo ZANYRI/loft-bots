@@ -457,6 +457,9 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 		{
 			{Text: "\U0001F464 Мой профиль", CallbackData: "profile_show"},
 		},
+		{
+			{Text: "📣 Наш канал", URL: "https://t.me/loft_shumno"},
+		},
 	}
 	if siteURL != "" {
 		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "🌐 Сайт", URL: siteURL}})

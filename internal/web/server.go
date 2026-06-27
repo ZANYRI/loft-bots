@@ -26,6 +26,7 @@ import (
 	"loft-bots/internal/repository"
 
 	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 //go:embed admin/index.html
@@ -52,6 +53,8 @@ type Server struct {
 	mux             *http.ServeMux
 	browserLinks    map[string]browserLink
 	browserLinksMu  sync.Mutex
+	broadcastMu     sync.Mutex
+	broadcastActive bool
 }
 
 type browserLink struct {
@@ -101,6 +104,7 @@ func NewServer(
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/verify", s.handleVerify)
 	s.mux.HandleFunc("/api/admin/browser-link", s.withAuth(s.handleBrowserLink))
+	s.mux.HandleFunc("/api/admin/broadcast", s.withAuth(s.handleBroadcast))
 	s.mux.HandleFunc("/browser-auth", s.handleBrowserAuth)
 	s.mux.HandleFunc("/api/admin/events", s.withAuth(s.handleEvents))
 	s.mux.HandleFunc("/api/admin/events/", s.withAuth(s.handleEventByID))
@@ -127,6 +131,102 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/schedule/", s.withAuth(s.handleSchedule))
 	s.mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.uploadDir))))
 	s.mux.HandleFunc("/", s.handleStatic)
+}
+
+func (s *Server) handleBroadcast(w http.ResponseWriter, r *http.Request, userID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Message string
+		EventID uint
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	payload.Message = strings.TrimSpace(payload.Message)
+	if payload.Message == "" && payload.EventID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "введите сообщение"})
+		return
+	}
+	if len([]rune(payload.Message)) > 4000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "сообщение слишком длинное"})
+		return
+	}
+	var event *db.Event
+	if payload.EventID != 0 {
+		var err error
+		event, err = s.eventRepo.GetByID(payload.EventID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "мероприятие не найдено"})
+			return
+		}
+	}
+	users, err := s.userRepo.GetAll()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.broadcastMu.Lock()
+	if s.broadcastActive {
+		s.broadcastMu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "другая рассылка ещё выполняется"})
+		return
+	}
+	s.broadcastActive = true
+	s.broadcastMu.Unlock()
+
+	go s.runBroadcast(users, payload.Message, event)
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"ok": true, "queued": len(users)})
+}
+
+func (s *Server) runBroadcast(users []db.User, message string, event *db.Event) {
+	defer func() {
+		s.broadcastMu.Lock()
+		s.broadcastActive = false
+		s.broadcastMu.Unlock()
+	}()
+	sent, failed := 0, 0
+	for _, user := range users {
+		if user.TelegramID == 0 {
+			continue
+		}
+		var err error
+		if event != nil {
+			err = s.sendEventAnnouncement(context.Background(), user.TelegramID, event)
+		} else {
+			_, err = s.clientBot.SendMessage(context.Background(), &bot.SendMessageParams{ChatID: user.TelegramID, Text: message})
+		}
+		if err != nil {
+			failed++
+			log.Printf("broadcast failed: telegram_id=%d err=%v", user.TelegramID, err)
+		} else {
+			sent++
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	log.Printf("broadcast completed: sent=%d failed=%d", sent, failed)
+}
+
+func (s *Server) sendEventAnnouncement(ctx context.Context, chatID int64, event *db.Event) error {
+	text := "🎭 Новое мероприятие: " + event.Title
+	if strings.TrimSpace(event.Description) != "" {
+		text += "\n\n" + strings.TrimSpace(event.Description)
+	}
+	text += fmt.Sprintf("\n\n📅 %s, %s–%s\n💰 Билет: %.0f ₽\n🔥 Осталось мест: %d из %d", formatDateRU(event.EventDate), event.TimeFrom, event.TimeTo, event.Price, event.PlacesLeft, event.TotalPlaces)
+	kb := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "🎟 Купить билет", CallbackData: fmt.Sprintf("buy_ticket_%d", event.ID)}}}}
+	image := strings.TrimSpace(event.ImageFileID)
+	if strings.HasPrefix(image, "/") && s.webAppURL != "" {
+		image = s.webAppURL + image
+	}
+	if image != "" && len([]rune(text)) <= 1024 {
+		_, err := s.clientBot.SendPhoto(ctx, &bot.SendPhotoParams{ChatID: chatID, Photo: &models.InputFileString{Data: image}, Caption: text, ReplyMarkup: kb})
+		return err
+	}
+	_, err := s.clientBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ReplyMarkup: kb})
+	return err
 }
 
 func (s *Server) Handle(pattern string, handler http.Handler) {
@@ -1075,6 +1175,17 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request, userID i
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
+	for i := range reservations {
+		if reservations[i].UserID == nil {
+			continue
+		}
+		paid, err := s.orderRepo.PrepaidByReservationID(reservations[i].ID)
+		if err != nil {
+			log.Printf("failed to calculate reservation payment: reservation_id=%d err=%v", reservations[i].ID, err)
+			continue
+		}
+		reservations[i].PaidAmount = paid
+	}
 	events, err := s.eventRepo.GetByRange(from, to)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -1083,20 +1194,22 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request, userID i
 	writeJSON(w, 200, map[string]interface{}{"reservations": reservations, "events": events})
 }
 
+type reservationPayload struct {
+	UserID           uint
+	Date             string
+	TimeFrom         string
+	TimeTo           string
+	Status           string
+	TotalPrice       float64
+	PrepaymentAmount float64
+}
+
 func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, userID int64) {
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	var payload struct {
-		UserID           uint
-		Date             string
-		TimeFrom         string
-		TimeTo           string
-		Status           string
-		TotalPrice       float64
-		PrepaymentAmount float64
-	}
+	var payload reservationPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -1117,6 +1230,12 @@ func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, user
 		writeJSON(w, 400, map[string]string{"error": "неверный статус брони"})
 		return
 	}
+	if payload.PrepaymentAmount < 0 {
+		payload.PrepaymentAmount = 0
+	}
+	if payload.PrepaymentAmount > payload.TotalPrice {
+		payload.PrepaymentAmount = payload.TotalPrice
+	}
 	var reservationUserID *uint
 	if payload.UserID != 0 {
 		if _, err := s.userRepo.GetByID(payload.UserID); err != nil {
@@ -1135,14 +1254,14 @@ func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, user
 		TotalPrice:   payload.TotalPrice,
 		Status:       payload.Status,
 	}
+	if reservationUserID == nil {
+		reservation.PaidAmount = payload.PrepaymentAmount
+	}
 	if err := s.reservationRepo.Create(reservation); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
 	if payload.PrepaymentAmount > 0 && reservationUserID != nil {
-		if payload.PrepaymentAmount > payload.TotalPrice {
-			payload.PrepaymentAmount = payload.TotalPrice
-		}
 		order := &db.Order{
 			UserID:        payload.UserID,
 			ReservationID: &reservation.ID,
@@ -1162,13 +1281,16 @@ func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, user
 }
 
 func (s *Server) handleReservationAction(w http.ResponseWriter, r *http.Request, userID int64) {
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin/reservations/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if r.Method == http.MethodPut && len(parts) == 1 {
+		s.handleReservationUpdate(w, r, parts[0])
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if len(parts) != 2 || parts[1] != "cancel" {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
@@ -1200,6 +1322,74 @@ func (s *Server) handleReservationAction(w http.ResponseWriter, r *http.Request,
 	}
 	s.notifyReservationCancelled(r.Context(), reservation)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleReservationUpdate(w http.ResponseWriter, r *http.Request, idPart string) {
+	id, err := strconv.ParseUint(idPart, 10, 64)
+	if err != nil || id == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный номер брони"})
+		return
+	}
+	reservation, err := s.reservationRepo.GetByID(uint(id))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "бронь не найдена"})
+		return
+	}
+	var payload reservationPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if payload.Date == "" || payload.TimeFrom == "" || payload.TimeTo == "" || payload.TotalPrice <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "заполните дату, время и сумму"})
+		return
+	}
+	date, err := time.Parse("2006-01-02", payload.Date)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверная дата"})
+		return
+	}
+	if payload.Status != "pending" && payload.Status != "confirmed" && payload.Status != "cancelled" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный статус брони"})
+		return
+	}
+	var selectedUserID *uint
+	if payload.UserID != 0 {
+		if _, err := s.userRepo.GetByID(payload.UserID); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "пользователь не найден"})
+			return
+		}
+		selectedUserID = &payload.UserID
+	}
+	previousStatus := reservation.Status
+	reservation.UserID = selectedUserID
+	reservation.Date = date
+	reservation.TimeFrom = payload.TimeFrom
+	reservation.TimeTo = payload.TimeTo
+	reservation.DayType = webDayType(date)
+	reservation.TotalPrice = payload.TotalPrice
+	reservation.PricePerHour = payload.TotalPrice / float64(maxInt(webCalcHours(payload.TimeFrom, payload.TimeTo), 1))
+	reservation.Status = payload.Status
+	if selectedUserID == nil {
+		reservation.PaidAmount = payload.PrepaymentAmount
+		if reservation.PaidAmount < 0 {
+			reservation.PaidAmount = 0
+		}
+		if reservation.PaidAmount > reservation.TotalPrice {
+			reservation.PaidAmount = reservation.TotalPrice
+		}
+	} else {
+		reservation.PaidAmount = 0
+	}
+	if err := s.reservationRepo.UpdateDetails(reservation); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if payload.Status == "cancelled" && previousStatus != "cancelled" {
+		_ = s.orderRepo.CancelByReservationID(reservation.ID)
+		s.notifyReservationCancelled(r.Context(), reservation)
+	}
+	writeJSON(w, http.StatusOK, reservation)
 }
 
 func (s *Server) notifyReservationCancelled(ctx context.Context, reservation *db.Reservation) {

@@ -122,6 +122,7 @@ const pages = [
   { id:'schedule', label:'\uD83D\uDCC5 Расписание' },
   { id:'reviews', label:'⭐ Отзывы' },
   { id:'contacts', label:'👥 Контакты' },
+  { id:'broadcasts', label:'📢 Рассылка' },
   { id:'messages', label:'\uD83D\uDCAC Сообщения' },
   { id:'settings', label:'\u2699 Настройки' },
 ];
@@ -204,6 +205,7 @@ function navigate(page){
     case 'schedule': renderSchedule();break;
     case 'reviews': renderReviews();break;
     case 'contacts': renderContacts();break;
+    case 'broadcasts': renderBroadcasts();break;
     case 'messages': renderMessages();break;
     case 'settings': renderSettings();break;
   }
@@ -264,6 +266,7 @@ async function showEventModal(id){
     </div>
     <input class="input" id="evPrice" type="number" placeholder="Цена" value="${e.Price||0}">
     <input class="input" id="evPlaces" type="number" min="1" placeholder="Всего мест" value="${e.TotalPlaces||20}">
+    ${id?'':`<label class="row" style="justify-content:flex-start;gap:10px"><input id="evBroadcast" type="checkbox"> <span>📢 Разослать мероприятие всем пользователям</span></label>`}
     <div class="grid grid-2 mt-8">
       <button class="btn" onclick="saveEvent(${id||''})">\u2705 Сохранить</button>
       <button class="btn btn-secondary" onclick="closeModal()">\u274C Отмена</button>
@@ -287,8 +290,13 @@ async function saveEvent(id){
   try{
     body.ImageFileID=id?state.events.find(x=>x.ID===id)?.ImageFileID||'':'';
     if(image)body.ImageFileID=(await uploadImage(image)).url;
-    if(id){await api('PUT','/events/'+id,body)}else{await api('POST','/events',body)}
-    closeModal();renderEvents();showToast('\u2705 Сохранено');
+    let saved,broadcastQueued=0;
+    if(id){saved=await api('PUT','/events/'+id,body)}else{saved=await api('POST','/events',body)}
+    if(!id&&$('evBroadcast')?.checked){
+      const result=await api('POST','/broadcast',{EventID:saved.ID});
+      broadcastQueued=result.queued||0;
+    }
+    closeModal();renderEvents();showToast(broadcastQueued?`✅ Сохранено, рассылка: ${broadcastQueued}`:'✅ Сохранено');
   }catch(e){showToast(e.message)}
 }
 
@@ -550,21 +558,21 @@ async function renderSchedule(){
   }catch(e){showToast(e.message)}
 }
 
-async function showReservationModal(){
+async function showReservationModal(reservation=null){
   try{
     state.contacts=await api('GET','/contacts');
     state.settings=await api('GET','/settings');
     const percent=Number(state.settings.find(s=>s.Key==='prepayment_percent')?.Value||30);
-    const users=state.contacts.filter(u=>u.Username).map(u=>`<option value="${u.ID}">@${escapeHtml(u.Username)}</option>`).join('');
+    const users=state.contacts.filter(u=>u.Username).map(u=>`<option value="${u.ID}" ${reservation&&Number(reservation.UserID)===Number(u.ID)?'selected':''}>@${escapeHtml(u.Username)}</option>`).join('');
     const m=$('modalContent');
-    m.innerHTML=`<h2>Добавить бронь</h2>
-      <select class="input" id="resUser"><option value="">Без пользователя</option>${users}</select>
-      <input class="input" id="resDate" type="date">
-      <div class="grid grid-2"><input class="input" id="resFrom" type="time" value="12:00"><input class="input" id="resTo" type="time" value="15:00"></div>
-      <select class="input" id="resStatus"><option value="pending">Ожидает</option><option value="confirmed">Подтверждено</option><option value="cancelled">Отменено</option></select>
-      <input class="input" id="resTotal" type="number" min="0" placeholder="Полная сумма, ₽" oninput="calcReservationPrepay(${percent})">
-      <input class="input" id="resPrepay" type="number" min="0" placeholder="Предоплата, ₽">
-      <p class="text-hint">Предоплата по настройке: ${percent}% от полной суммы. Можно изменить вручную.</p>
+    m.innerHTML=`<h2>${reservation?'Редактировать бронь':'Добавить бронь'}</h2>
+      <input id="resID" type="hidden" value="${reservation?.ID||''}">
+      <select class="input" id="resUser"><option value="" ${!reservation?.UserID?'selected':''}>Без пользователя</option>${users}</select>
+      <input class="input" id="resDate" type="date" value="${dateInputValue(reservation?.Date||'')}">
+      <div class="grid grid-2"><input class="input" id="resFrom" type="time" value="${reservation?.TimeFrom||'12:00'}"><input class="input" id="resTo" type="time" value="${reservation?.TimeTo||'15:00'}"></div>
+      <select class="input" id="resStatus"><option value="pending" ${reservation?.Status==='pending'?'selected':''}>Ожидает</option><option value="confirmed" ${reservation?.Status==='confirmed'?'selected':''}>Подтверждено</option><option value="cancelled" ${reservation?.Status==='cancelled'?'selected':''}>Отменено</option></select>
+      <input class="input" id="resTotal" type="number" min="0" placeholder="Полная сумма, ₽" value="${reservation?.TotalPrice||''}" ${reservation?'':'oninput="calcReservationPrepay('+percent+')"'}>
+      ${reservation?.UserID?'':`<input class="input" id="resPrepay" type="number" min="0" placeholder="Получено, ₽" value="${reservation?.PaidAmount||''}"><p class="text-hint">Эта сумма учитывается в выручке. Можно изменить вручную.</p>`}
       <div class="grid grid-2 mt-8"><button class="btn" onclick="saveReservation()">✅ Сохранить</button><button class="btn btn-secondary" onclick="closeModal()">❌ Отмена</button></div>`;
     $('modal').classList.add('show');
   }catch(e){showToast(e.message)}
@@ -576,8 +584,14 @@ function calcReservationPrepay(percent){
 }
 
 async function saveReservation(){
-  const body={UserID:Number($('resUser').value),Date:$('resDate').value,TimeFrom:$('resFrom').value,TimeTo:$('resTo').value,Status:$('resStatus').value,TotalPrice:Number($('resTotal').value||0),PrepaymentAmount:Number($('resPrepay').value||0)};
-  try{await api('POST','/reservations',body);closeModal();renderSchedule();showToast('✅ Бронь добавлена')}catch(e){showToast(e.message)}
+  const id=$('resID').value;
+  const body={UserID:Number($('resUser').value),Date:$('resDate').value,TimeFrom:$('resFrom').value,TimeTo:$('resTo').value,Status:$('resStatus').value,TotalPrice:Number($('resTotal').value||0),PrepaymentAmount:Number($('resPrepay')?.value||0)};
+  try{await api(id?'PUT':'POST',id?'/reservations/'+id:'/reservations',body);closeModal();renderSchedule();showToast(id?'✅ Бронь обновлена':'✅ Бронь добавлена')}catch(e){showToast(e.message)}
+}
+
+function editReservation(id){
+  const reservation=(state.schedule.reservations||[]).find(r=>Number(r.ID)===Number(id));
+  if(reservation)showReservationModal(reservation);
 }
 
 function renderScheduleList(data){
@@ -586,8 +600,8 @@ function renderScheduleList(data){
   const reservationHtml=reservations.map(r=>`
     <div class="card">
       <div class="flex-between"><b>${formatDate(r.Date)}</b> \uD83D\uDC64 ${r.UserID?(r.User?.Username?'@'+escapeHtml(r.User.Username):'Пользователь #'+r.UserID):'Без пользователя'}</div>
-      <div>\uD83D\uDD50 ${r.TimeFrom}-${r.TimeTo} | \uD83D\uDCB0 ${r.TotalPrice||0} \u20BD | <span class="status-${r.Status}">${statusIcon(r.Status)} ${statusLabel(r.Status)}</span></div>
-      ${r.Status==='cancelled'?'':`<button class="btn-small btn-danger" onclick="cancelReservation(${r.ID})">❌ Отменить бронь</button>`}
+      <div>\uD83D\uDD50 ${r.TimeFrom}-${r.TimeTo} | \uD83D\uDCB0 Оплачено: ${(r.PaidAmount||0).toLocaleString('ru')} \u20BD из ${(r.TotalPrice||0).toLocaleString('ru')} \u20BD | <span class="status-${r.Status}">${statusIcon(r.Status)} ${statusLabel(r.Status)}</span></div>
+      <div class="grid grid-2 mt-8"><button class="btn-small" onclick="editReservation(${r.ID})">✏️ Редактировать</button>${r.Status==='cancelled'?'':`<button class="btn-small btn-danger" onclick="cancelReservation(${r.ID})">❌ Отменить</button>`}</div>
     </div>`).join('');
   const eventHtml=events.map(e=>`<div class="card"><div class="flex-between"><b>\uD83C\uDFAD ${escapeHtml(e.Title)}</b><span class="badge">Афиша</span></div><div>${formatDate(e.EventDate)} ${e.TimeFrom}-${e.TimeTo}</div><div class="text-hint">Билет: ${e.Price||0} \u20BD</div></div>`).join('');
   $('scheduleList').innerHTML=eventHtml+reservationHtml;
@@ -713,6 +727,30 @@ async function renderContacts(){
       <div id="contactsList"></div>`;
     $('contactsList').innerHTML=(users.length?users.map(u=>`<div class="card"><div class="flex-between"><b>@${escapeHtml(u.Username)}</b><a class="btn-small btn-secondary" href="https://t.me/${escapeHtml(u.Username)}" target="_blank">Открыть</a></div><div class="text-hint">Telegram ID: ${u.TelegramID}</div></div>`).join(''):'<div class="card"><p class="text-hint">Контактов с username пока нет</p></div>')+
       (without.length?`<div class="card"><b>Без username</b><p class="text-hint">${without.length} пользователь(ей) без публичного @username.</p></div>`:'');
+  }catch(e){showToast(e.message)}
+}
+
+async function renderBroadcasts(){
+  try{
+    state.contacts=await api('GET','/contacts');
+    $('pageContent').innerHTML=`
+      <div class="card">
+        <div class="flex-between"><b>📢 Рассылка пользователям</b><span class="badge">${state.contacts.length}</span></div>
+        <p class="text-hint">Сообщение получат все пользователи, которые хотя бы раз запускали клиентского бота. Заблокировавшим бота сообщение доставлено не будет.</p>
+        <textarea class="input" id="broadcastText" rows="8" maxlength="4000" placeholder="Введите сообщение для рассылки"></textarea>
+        <button class="btn" onclick="sendBroadcast()">📨 Отправить всем</button>
+      </div>`;
+  }catch(e){showToast(e.message)}
+}
+
+async function sendBroadcast(){
+  const message=$('broadcastText').value.trim();
+  if(!message){showToast('Введите сообщение');return}
+  if(!confirm(`Отправить сообщение ${state.contacts.length} пользователям?`))return;
+  try{
+    const result=await api('POST','/broadcast',{Message:message});
+    $('broadcastText').value='';
+    showToast(`📢 Рассылка запущена: ${result.queued||0}`);
   }catch(e){showToast(e.message)}
 }
 

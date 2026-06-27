@@ -88,13 +88,20 @@ const TG = (window.Telegram && window.Telegram.WebApp) || {
 TG.expand();
 TG.enableClosingConfirmation();
 
-async function openInBrowser(){
+let preparedBrowserURL='';
+async function prepareBrowserLink(){
   try{
     const result=await api('POST','/browser-link');
-    const url=new URL(result.url,window.location.origin).href;
-    if(typeof TG.openLink==='function')TG.openLink(url);
-    else window.open(url,'_blank','noopener');
-  }catch(e){showToast('Не удалось открыть браузер: '+e.message)}
+    preparedBrowserURL=new URL(result.url,window.location.origin).href;
+  }catch(e){preparedBrowserURL=''}
+}
+function openInBrowser(){
+  if(!preparedBrowserURL){showToast('Ссылка готовится, нажмите ещё раз');prepareBrowserLink();return}
+  const url=preparedBrowserURL;
+  preparedBrowserURL='';
+  if(typeof TG.openLink==='function')TG.openLink(url);
+  else window.open(url,'_blank','noopener');
+  setTimeout(prepareBrowserLink,1000);
 }
 
 const API_BASE = '';
@@ -167,6 +174,8 @@ async function init(){
     if(!token){showToast('Вход через браузер')}
     const v = await api('POST','/verify');
     if(!v.ok){showToast('Нет доступа');return}
+    prepareBrowserLink();
+    setInterval(prepareBrowserLink,60000);
     renderNav();
     navigate('dashboard');
     $('loading').classList.add('hidden');
@@ -548,7 +557,7 @@ async function showReservationModal(){
     const users=state.contacts.filter(u=>u.Username).map(u=>`<option value="${u.ID}">@${escapeHtml(u.Username)}</option>`).join('');
     const m=$('modalContent');
     m.innerHTML=`<h2>Добавить бронь</h2>
-      <select class="input" id="resUser">${users}</select>
+      <select class="input" id="resUser"><option value="">Без пользователя</option>${users}</select>
       <input class="input" id="resDate" type="date">
       <div class="grid grid-2"><input class="input" id="resFrom" type="time" value="12:00"><input class="input" id="resTo" type="time" value="15:00"></div>
       <select class="input" id="resStatus"><option value="pending">Ожидает</option><option value="confirmed">Подтверждено</option><option value="cancelled">Отменено</option></select>
@@ -575,7 +584,7 @@ function renderScheduleList(data){
   if(!reservations.length&&!events.length){$('scheduleList').innerHTML='<p class="text-hint">Нет записей за выбранный период</p>';return}
   const reservationHtml=reservations.map(r=>`
     <div class="card">
-      <div class="flex-between"><b>${formatDate(r.Date)}</b> \uD83D\uDC64 @${r.User?.Username||'?'}</div>
+      <div class="flex-between"><b>${formatDate(r.Date)}</b> \uD83D\uDC64 ${r.UserID?(r.User?.Username?'@'+escapeHtml(r.User.Username):'Пользователь #'+r.UserID):'Без пользователя'}</div>
       <div>\uD83D\uDD50 ${r.TimeFrom}-${r.TimeTo} | \uD83D\uDCB0 ${r.TotalPrice||0} \u20BD | <span class="status-${r.Status}">${statusIcon(r.Status)} ${statusLabel(r.Status)}</span></div>
       ${r.Status==='cancelled'?'':`<button class="btn-small btn-danger" onclick="cancelReservation(${r.ID})">❌ Отменить бронь</button>`}
     </div>`).join('');

@@ -74,7 +74,7 @@ type MenuItem struct {
 
 type Reservation struct {
 	ID                    uint       `gorm:"primaryKey"`
-	UserID                uint       `gorm:"not null;index"`
+	UserID                *uint      `gorm:"index"`
 	Date                  time.Time  `gorm:"type:date;not null"`
 	TimeFrom              string     `gorm:"size:5;not null"`
 	TimeTo                string     `gorm:"size:5;not null"`

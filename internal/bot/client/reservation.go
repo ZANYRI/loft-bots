@@ -429,7 +429,7 @@ func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int
 	totalPrice, _ := data["total_price"].(float64)
 
 	reservation := &db.Reservation{
-		UserID:       user.ID,
+		UserID:       &user.ID,
 		Date:         date,
 		TimeFrom:     timeFrom,
 		TimeTo:       timeTo,

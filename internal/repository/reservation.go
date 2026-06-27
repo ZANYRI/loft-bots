@@ -96,6 +96,7 @@ func (r *ReservationRepo) GetDueBalanceReminders(now time.Time) ([]db.Reservatio
 	var reservations []db.Reservation
 	err := r.db.Preload("User").
 		Where("status = ? AND balance_reminder_sent_at IS NULL", "confirmed").
+		Where("user_id IS NOT NULL").
 		Where("(date + time_from::time) <= ?", now).
 		Order("date ASC, time_from ASC").
 		Find(&reservations).Error
@@ -107,6 +108,7 @@ func (r *ReservationRepo) GetDueStartReminders(now time.Time, minutesBefore int)
 	target := now.Add(time.Duration(minutesBefore) * time.Minute)
 	err := r.db.Preload("User").
 		Where("status = ?", "confirmed").
+		Where("user_id IS NOT NULL").
 		Where("reminder_60_sent_at IS NULL").
 		Where("(date + time_from::time) <= ?", target).
 		Where("(date + time_from::time) > ?", now).
@@ -121,6 +123,7 @@ func (r *ReservationRepo) GetDueEndReminders(now time.Time, minutesBefore int) (
 	endExpr := `(date + time_to::time + CASE WHEN time_to <= time_from THEN interval '1 day' ELSE interval '0 day' END)`
 	err := r.db.Preload("User").
 		Where("status = ?", "confirmed").
+		Where("user_id IS NOT NULL").
 		Where("reminder_30_sent_at IS NULL").
 		Where(endExpr+" <= ?", target).
 		Where(endExpr+" > ?", now).

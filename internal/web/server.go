@@ -305,6 +305,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
 		w.Write(data)
 		return
 	}
@@ -1099,8 +1101,8 @@ func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, user
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	if payload.UserID == 0 || payload.Date == "" || payload.TimeFrom == "" || payload.TimeTo == "" || payload.TotalPrice <= 0 {
-		writeJSON(w, 400, map[string]string{"error": "заполните пользователя, дату, время и сумму"})
+	if payload.Date == "" || payload.TimeFrom == "" || payload.TimeTo == "" || payload.TotalPrice <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "заполните дату, время и сумму"})
 		return
 	}
 	date, err := time.Parse("2006-01-02", payload.Date)
@@ -1115,12 +1117,16 @@ func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, user
 		writeJSON(w, 400, map[string]string{"error": "неверный статус брони"})
 		return
 	}
-	if _, err := s.userRepo.GetByID(payload.UserID); err != nil {
-		writeJSON(w, 404, map[string]string{"error": "пользователь не найден"})
-		return
+	var reservationUserID *uint
+	if payload.UserID != 0 {
+		if _, err := s.userRepo.GetByID(payload.UserID); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "пользователь не найден"})
+			return
+		}
+		reservationUserID = &payload.UserID
 	}
 	reservation := &db.Reservation{
-		UserID:       payload.UserID,
+		UserID:       reservationUserID,
 		Date:         date,
 		TimeFrom:     payload.TimeFrom,
 		TimeTo:       payload.TimeTo,
@@ -1133,7 +1139,7 @@ func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request, user
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	if payload.PrepaymentAmount > 0 {
+	if payload.PrepaymentAmount > 0 && reservationUserID != nil {
 		if payload.PrepaymentAmount > payload.TotalPrice {
 			payload.PrepaymentAmount = payload.TotalPrice
 		}
@@ -1197,6 +1203,9 @@ func (s *Server) handleReservationAction(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) notifyReservationCancelled(ctx context.Context, reservation *db.Reservation) {
+	if reservation.UserID == nil || reservation.User.TelegramID == 0 {
+		return
+	}
 	message := "❌ Ваша бронь на {date}, {time_from}–{time_to} была отменена администратором."
 	if setting, err := s.settingsRepo.Get("message_reservation_cancelled"); err == nil && setting != nil && strings.TrimSpace(setting.Value) != "" {
 		message = setting.Value

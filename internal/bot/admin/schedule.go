@@ -164,6 +164,9 @@ func (h *ScheduleHandler) HandleCancel(ctx context.Context, b *bot.Bot, chatID i
 }
 
 func (h *ScheduleHandler) notifyReservationCancelled(ctx context.Context, reservation *db.Reservation) {
+	if reservation.UserID == nil || reservation.User.TelegramID == 0 {
+		return
+	}
 	message := "❌ Ваша бронь на {date}, {time_from}–{time_to} была отменена администратором."
 	if setting, err := h.settingsRepo.Get("message_reservation_cancelled"); err == nil && setting != nil && strings.TrimSpace(setting.Value) != "" {
 		message = setting.Value

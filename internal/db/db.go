@@ -34,6 +34,8 @@ func Connect(dsn string) *gorm.DB {
 	if err := AutoMigrate(db); err != nil {
 		log.Fatalf("failed to auto-migrate: %v", err)
 	}
+	// Admin-created reservations may be walk-ins without a Telegram user.
+	db.Exec(`ALTER TABLE reservations ALTER COLUMN user_id DROP NOT NULL`)
 	syncReservationStatusesFromOrders(db)
 	db.Exec(`ALTER TABLE reservations DROP COLUMN IF EXISTS reminder30_sent_at`)
 	db.Exec(`ALTER TABLE reservations DROP COLUMN IF EXISTS reminder60_sent_at`)

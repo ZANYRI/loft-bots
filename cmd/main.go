@@ -1075,6 +1075,8 @@ func (app *App) handleAdminMessage(ctx context.Context, b *bot.Bot, update *mode
 		app.adminPosterHandler.HandleTimeTo(ctx, b, chatID, telegramID, update.Message.Text)
 	case "admin:poster:price":
 		app.adminPosterHandler.HandlePrice(ctx, b, chatID, telegramID, update.Message.Text)
+	case "admin:poster:payment_phone":
+		app.adminPosterHandler.HandlePaymentPhone(ctx, b, chatID, telegramID, update.Message.Text)
 	case "admin:menu:name":
 		app.adminMenuHandler.HandleName(ctx, b, chatID, telegramID, update.Message.Text)
 	case "admin:menu:price":
@@ -1225,6 +1227,12 @@ func (app *App) handleAdminCallback(ctx context.Context, b *bot.Bot, update *mod
 
 	case data == "admin_poster_save":
 		app.adminPosterHandler.Save(ctx, b, chatID, telegramID)
+
+	case data == "admin_poster_phone_yes":
+		app.adminPosterHandler.HandlePaymentPhoneChoice(ctx, b, chatID, telegramID, true)
+
+	case data == "admin_poster_phone_no":
+		app.adminPosterHandler.HandlePaymentPhoneChoice(ctx, b, chatID, telegramID, false)
 
 	case data == "admin_menu":
 		app.adminMenuHandler.ShowMenu(ctx, b, chatID)

@@ -74,6 +74,7 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 
 	var totalPrice float64
 
+	var eventPaymentPhone string
 	if eventID, ok := data["event_id"]; ok {
 		event, err := h.eventRepo.GetByID(uint(eventID.(float64)))
 		if err == nil {
@@ -83,6 +84,9 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 			}
 			text += fmt.Sprintf("\U0001F39F Билет на «%s» × %d \u2014 %.0f \u20BD\n", event.Title, int(quantity), event.Price*quantity)
 			totalPrice += event.Price * quantity
+			if event.PaymentPhone != "" {
+				eventPaymentPhone = event.PaymentPhone
+			}
 		}
 	}
 
@@ -139,8 +143,11 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 
 	customPhone, _ := data["custom_payment_phone"].(string)
 	displayPhone := paymentPhone
-	if customPhone != "" {
+	switch {
+	case customPhone != "":
 		displayPhone = customPhone
+	case eventPaymentPhone != "":
+		displayPhone = eventPaymentPhone
 	}
 
 	text += fmt.Sprintf("\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001F4B0 Итого: %.0f \u20BD\n\n", totalPrice)

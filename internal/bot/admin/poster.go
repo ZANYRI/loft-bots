@@ -162,6 +162,40 @@ func (h *PosterHandler) HandlePrice(ctx context.Context, b *bot.Bot, chatID int6
 
 	_, data, _ := h.fsm.GetState(telegramID, "admin")
 	data["price"] = price
+	h.fsm.SetState(telegramID, "admin", "admin:poster:payment_phone_ask", data)
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("Цена: %.0f ₽\n\nХотите указать другой номер для оплаты этого мероприятия?", price),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "Да", CallbackData: "admin_poster_phone_yes"}, {Text: "Нет", CallbackData: "admin_poster_phone_no"}},
+			},
+		},
+	})
+}
+
+func (h *PosterHandler) HandlePaymentPhoneChoice(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, useCustomPhone bool) {
+	if useCustomPhone {
+		h.fsm.SetState(telegramID, "admin", "admin:poster:payment_phone", nil)
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Введите номер телефона или реквизиты для оплаты:",
+		})
+		return
+	}
+	h.showConfirm(ctx, b, chatID, telegramID)
+}
+
+func (h *PosterHandler) HandlePaymentPhone(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, phone string) {
+	_, data, _ := h.fsm.GetState(telegramID, "admin")
+	data["payment_phone"] = phone
+	h.fsm.SetState(telegramID, "admin", "admin:poster:confirm", data)
+	h.showConfirm(ctx, b, chatID, telegramID)
+}
+
+func (h *PosterHandler) showConfirm(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+	_, data, _ := h.fsm.GetState(telegramID, "admin")
 	h.fsm.SetState(telegramID, "admin", "admin:poster:confirm", data)
 
 	title, _ := data["title"].(string)
@@ -169,9 +203,14 @@ func (h *PosterHandler) HandlePrice(ctx context.Context, b *bot.Bot, chatID int6
 	eventDate, _ := data["event_date"].(string)
 	timeFrom, _ := data["time_from"].(string)
 	timeTo, _ := data["time_to"].(string)
+	price, _ := data["price"].(float64)
+	phone, _ := data["payment_phone"].(string)
 
 	text := fmt.Sprintf("Проверьте данные:\n\nНазвание: %s\nОписание: %s\nДата: %s\nВремя: %s\u2013%s\nЦена: %.0f \u20BD",
 		title, desc, eventDate, timeFrom, timeTo, price)
+	if phone != "" {
+		text += fmt.Sprintf("\nРеквизиты: %s", phone)
+	}
 
 	keyboard := [][]models.InlineKeyboardButton{
 		{
@@ -205,6 +244,7 @@ func (h *PosterHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, tele
 	timeFrom, _ := data["time_from"].(string)
 	timeTo, _ := data["time_to"].(string)
 	price, _ := data["price"].(float64)
+	paymentPhone, _ := data["payment_phone"].(string)
 
 	eventDate, _ := time.Parse("2006-01-02", dateStr)
 	if dateOnly(eventDate).Before(dateOnly(time.Now())) {
@@ -216,15 +256,16 @@ func (h *PosterHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, tele
 	}
 
 	event := &db.Event{
-		Title:       title,
-		Description: desc,
-		ImageFileID: imageFileID,
-		EventDate:   eventDate,
-		TimeFrom:    timeFrom,
-		TimeTo:      timeTo,
-		Price:       price,
-		IsActive:    true,
-		CreatedAt:   time.Now(),
+		Title:        title,
+		Description:  desc,
+		ImageFileID:  imageFileID,
+		EventDate:    eventDate,
+		TimeFrom:     timeFrom,
+		TimeTo:       timeTo,
+		Price:        price,
+		PaymentPhone: paymentPhone,
+		IsActive:     true,
+		CreatedAt:    time.Now(),
 	}
 
 	if err := h.eventRepo.Create(event); err != nil {
@@ -301,8 +342,12 @@ func (h *PosterHandler) Edit(ctx context.Context, b *bot.Bot, chatID int64, tele
 		status = "\U0001F534 Скрыто"
 	}
 
-	text := fmt.Sprintf("\u270F\uFE0F Редактировать: «%s»\n\n\U0001F4DD %s\n\U0001F4C5 %s, %s\u2013%s\n\U0001F4B0 %.0f \u20BD\n%s",
-		event.Title, event.Description, event.EventDate.Format("2 January 2006"), event.TimeFrom, event.TimeTo, event.Price, status)
+	phoneLine := ""
+	if event.PaymentPhone != "" {
+		phoneLine = fmt.Sprintf("\n\U0001F4F2 Реквизиты: %s", event.PaymentPhone)
+	}
+	text := fmt.Sprintf("\u270F\uFE0F Редактировать: «%s»\n\n\U0001F4DD %s\n\U0001F4C5 %s, %s\u2013%s\n\U0001F4B0 %.0f \u20BD%s\n%s",
+		event.Title, event.Description, event.EventDate.Format("2 January 2006"), event.TimeFrom, event.TimeTo, event.Price, phoneLine, status)
 
 	toggleLabel := "\U0001F441 Скрыть из афиши"
 	if !event.IsActive {

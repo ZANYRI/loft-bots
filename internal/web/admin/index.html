@@ -265,6 +265,8 @@ async function showEventModal(id){
     </div>
     <input class="input" id="evPrice" type="number" placeholder="Цена" value="${e.Price||0}">
     <input class="input" id="evPlaces" type="number" min="1" placeholder="Всего мест" value="${e.TotalPlaces||20}">
+    <label class="row" style="justify-content:flex-start;gap:10px;margin-bottom:8px"><input id="evCustomPhoneChk" type="checkbox" onchange="document.getElementById('evPaymentPhone').style.display=this.checked?'block':'none'" ${e.PaymentPhone?'checked':''}> <span>Вставить другой номер</span></label>
+    <input class="input" id="evPaymentPhone" placeholder="Номер для оплаты" value="${escapeHtml(e.PaymentPhone||'')}" style="display:${e.PaymentPhone?'block':'none'};margin-top:4px">
     ${id?'':`<label class="row" style="justify-content:flex-start;gap:10px"><input id="evBroadcast" type="checkbox"> <span>📢 Разослать мероприятие всем пользователям</span></label>`}
     <div class="grid grid-2 mt-8">
       <button class="btn" onclick="saveEvent(${id||''})">\u2705 Сохранить</button>
@@ -285,6 +287,7 @@ async function saveEvent(id){
     TotalPlaces:parseInt($('evPlaces').value)||20,
     PlacesLeft:id?state.events.find(x=>x.ID===id)?.PlacesLeft||0:parseInt($('evPlaces').value)||20,
     IsActive:id?state.events.find(x=>x.ID===id)?.IsActive:true,
+    PaymentPhone:$('evCustomPhoneChk').checked?$('evPaymentPhone').value:'',
   };
   try{
     body.ImageFileID=id?state.events.find(x=>x.ID===id)?.ImageFileID||'':'';

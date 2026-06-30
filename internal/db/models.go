@@ -24,9 +24,10 @@ type Event struct {
 	Price       float64   `gorm:"type:decimal(10,2);not null"`
 	TotalPlaces int       `gorm:"not null;default:20"`
 	PlacesLeft  int       `gorm:"not null;default:20"`
-	IsActive    bool      `gorm:"default:true"`
-	CreatedAt   time.Time
-	DeletedAt   *time.Time `gorm:"index"`
+	PaymentPhone string    `gorm:"size:255"`
+	IsActive     bool      `gorm:"default:true"`
+	CreatedAt    time.Time
+	DeletedAt    *time.Time `gorm:"index"`
 }
 
 type RentalPrice struct {

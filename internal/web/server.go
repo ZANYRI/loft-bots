@@ -578,16 +578,17 @@ func (s *Server) handleEventByID(w http.ResponseWriter, r *http.Request, userID 
 // and the RFC3339 value returned by the API.
 func decodeEvent(r *http.Request) (db.Event, error) {
 	var payload struct {
-		Title       string
-		Description string
-		ImageFileID string
-		EventDate   string
-		TimeFrom    string
-		TimeTo      string
-		Price       float64
-		TotalPlaces int
-		PlacesLeft  int
-		IsActive    bool
+		Title        string
+		Description  string
+		ImageFileID  string
+		EventDate    string
+		TimeFrom     string
+		TimeTo       string
+		Price        float64
+		TotalPlaces  int
+		PlacesLeft   int
+		IsActive     bool
+		PaymentPhone string
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		return db.Event{}, err
@@ -602,16 +603,17 @@ func decodeEvent(r *http.Request) (db.Event, error) {
 	}
 
 	return db.Event{
-		Title:       payload.Title,
-		Description: payload.Description,
-		ImageFileID: payload.ImageFileID,
-		EventDate:   date,
-		TimeFrom:    payload.TimeFrom,
-		TimeTo:      payload.TimeTo,
-		Price:       payload.Price,
-		TotalPlaces: payload.TotalPlaces,
-		PlacesLeft:  payload.PlacesLeft,
-		IsActive:    payload.IsActive,
+		Title:        payload.Title,
+		Description:  payload.Description,
+		ImageFileID:  payload.ImageFileID,
+		EventDate:    date,
+		TimeFrom:     payload.TimeFrom,
+		TimeTo:       payload.TimeTo,
+		Price:        payload.Price,
+		TotalPlaces:  payload.TotalPlaces,
+		PlacesLeft:   payload.PlacesLeft,
+		IsActive:     payload.IsActive,
+		PaymentPhone: payload.PaymentPhone,
 	}, nil
 }
 

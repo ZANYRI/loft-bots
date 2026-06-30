@@ -52,6 +52,7 @@ func Connect(dsn string) *gorm.DB {
 		"message_after_payment",
 		"✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽.",
 	)
+	db.Exec(`ALTER TABLE events ADD COLUMN IF NOT EXISTS payment_phone VARCHAR(255) DEFAULT ''`)
 
 	seedDefaults(db)
 

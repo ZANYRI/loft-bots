@@ -26,6 +26,7 @@ type Event struct {
 	PlacesLeft  int       `gorm:"not null;default:20"`
 	IsActive    bool      `gorm:"default:true"`
 	CreatedAt   time.Time
+	DeletedAt   *time.Time `gorm:"index"`
 }
 
 type RentalPrice struct {
@@ -57,6 +58,7 @@ type Discount struct {
 type MenuCategory struct {
 	ID        uint   `gorm:"primaryKey"`
 	Name      string `gorm:"size:255;not null"`
+	Type      string `gorm:"size:20;not null;default:menu;index"`
 	Emoji     string `gorm:"size:10"`
 	ImageURL  string `gorm:"size:512"`
 	SortOrder int    `gorm:"default:0"`

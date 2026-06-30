@@ -105,26 +105,40 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 
 	menuTotal := h.calculateMenuTotal(data)
 	if menuTotal > 0 {
-		text += "\U0001F37D Доп. Услуги и Меню:\n"
-		for key, val := range data {
-			if len(key) <= 5 || key[:5] != "cart_" {
-				continue
+		for _, group := range []struct{ kind, title string }{{"menu", "🍽 Меню:"}, {"service", "✨ Дополнительные услуги:"}} {
+			groupText := ""
+			groupTotal := 0.0
+			for key, val := range data {
+				if len(key) <= 5 || key[:5] != "cart_" {
+					continue
+				}
+				item, ok := val.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				kind, _ := item["category_type"].(string)
+				if kind == "" {
+					kind = "menu"
+				}
+				if kind != group.kind {
+					continue
+				}
+				name, _ := item["name"].(string)
+				price, _ := item["price"].(float64)
+				quantity, _ := item["qty"].(float64)
+				subtotal := price * quantity
+				groupTotal += subtotal
+				groupText += fmt.Sprintf("   • %s × %d — %.0f ₽\n", name, int(quantity), subtotal)
 			}
-			item, ok := val.(map[string]interface{})
-			if !ok {
-				continue
+			if groupText != "" {
+				text += group.title + "\n" + groupText + fmt.Sprintf("   Итого — %.0f ₽\n", groupTotal)
 			}
-			name, _ := item["name"].(string)
-			price, _ := item["price"].(float64)
-			quantity, _ := item["qty"].(float64)
-			text += fmt.Sprintf("   • %s × %d — %.0f \u20BD\n", name, int(quantity), price*quantity)
 		}
-		text += fmt.Sprintf("   Итого доп. услуги — %.0f \u20BD\n", menuTotal)
 		totalPrice += menuTotal
 	}
 
 	text += fmt.Sprintf("\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001F4B0 Итого: %.0f \u20BD\n\n", totalPrice)
-	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на номер:\n%s\nТ-Банк, Кирилл П.\n\n", paymentPhone)
+	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на реквизиты:\n%s\n\n", paymentPhone)
 	text += "После оплаты отправьте фото или PDF-чек одним сообщением. \U0001F447"
 	if _, isTicket := data["event_id"]; !isTicket {
 		depositStr := "0"
@@ -326,8 +340,6 @@ func (h *PaymentHandler) HandleReceipt(ctx context.Context, b *bot.Bot, chatID i
 		}
 	}
 	h.HandlePaymentDone(ctx, b, chatID, telegramID)
-	receiptMessage := h.settingValue("message_receipt_received", "✅ Чек получен и ожидает подтверждения со стороны администратора. Это может занять некоторое время — не беспокойтесь.")
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: receiptMessage})
 }
 
 func (h *PaymentHandler) settingValue(key, fallback string) string {

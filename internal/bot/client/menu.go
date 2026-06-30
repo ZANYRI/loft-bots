@@ -39,8 +39,11 @@ func NewMenuHandler(
 	}
 }
 
-func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int64) {
-	categories, err := h.menuCatRepo.GetAll()
+func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, categoryType string) {
+	if categoryType != "service" {
+		categoryType = "menu"
+	}
+	categories, err := h.menuCatRepo.GetByType(categoryType)
 	if err != nil {
 		log.Printf("failed to get categories: %v", err)
 		SendErrorMessage(ctx, b, chatID)
@@ -62,10 +65,16 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 		}
 	}
 
-	keyboard = append(keyboard, []models.InlineKeyboardButton{
-		{Text: "\U0001F519 Главное меню", CallbackData: "main_menu"},
-	})
+	if h.hasActiveCheckout(telegramID) {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "➡ Перейти к оплате", CallbackData: "go_to_payment"}})
+	} else {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "\U0001F519 Главное меню", CallbackData: "main_menu"}})
+	}
 
+	title := "🍽️ Меню:"
+	if categoryType == "service" {
+		title = "✨ Дополнительные услуги:"
+	}
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text: `🍷 Правила по алкоголю (BYOB)
@@ -74,7 +83,7 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 🔥 Секретная акция:
 Забронируйте дополнительные услуги прямо сейчас, и мы сделаем скидку 15%. Мы все подготовим к Вашему приходу!
 
-🍽️ Доп. Услуги и Меню:`,
+` + title,
 		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
@@ -82,7 +91,7 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 	})
 }
 
-func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID int64, categoryID uint) {
+func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, categoryID uint) {
 	items, err := h.menuItemRepo.GetByCategoryID(categoryID)
 	if err != nil {
 		log.Printf("failed to get items: %v", err)
@@ -115,8 +124,15 @@ func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{
 		{Text: "\U0001F6D2 Корзина", CallbackData: "menu_cart"},
 	})
+	if h.hasActiveCheckout(telegramID) {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "➡ Перейти к оплате", CallbackData: "go_to_payment"}})
+	}
+	backCallback := "menu_categories"
+	if cat.Type == "service" {
+		backCallback = "service_categories"
+	}
 	keyboard = append(keyboard, []models.InlineKeyboardButton{
-		{Text: "\U0001F519 Назад к категориям", CallbackData: "menu_categories"},
+		{Text: "\U0001F519 Назад к категориям", CallbackData: backCallback},
 	})
 
 	replyMarkup := &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
@@ -164,17 +180,13 @@ func (h *MenuHandler) AddToCart(ctx context.Context, b *bot.Bot, chatID int64, u
 		}
 	}
 	if err := h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
-		key: map[string]interface{}{"item_id": menuItemID, "name": item.Name, "price": item.Price, "qty": qty},
+		key: map[string]interface{}{"item_id": menuItemID, "name": item.Name, "price": item.Price, "qty": qty, "category_type": item.Category.Type},
 	}); err != nil {
 		log.Printf("failed to add item to cart: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   fmt.Sprintf("\u2714 %s добавлен в корзину!", item.Name),
-	})
 }
 
 func (h *MenuHandler) RemoveFromCart(ctx context.Context, b *bot.Bot, chatID int64, menuItemID uint, telegramID int64) {
@@ -242,7 +254,11 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 			subtotal := price * float64(qty)
 			total += subtotal
 			hasItems = true
-			text += fmt.Sprintf("\u2022 %s \u00d7 %d \u2014 %.0f \u20BD\n", name, qty, subtotal)
+			icon := "🍽"
+			if kind, _ := item["category_type"].(string); kind == "service" {
+				icon = "✨"
+			}
+			text += fmt.Sprintf("%s %s × %d — %.0f ₽\n", icon, name, qty, subtotal)
 			removeButtons = append(removeButtons, []models.InlineKeyboardButton{{Text: "➖ " + name, CallbackData: "menu_remove_" + fmt.Sprint(item["item_id"])}})
 		}
 	}
@@ -263,7 +279,7 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 
 	keyboard := append(removeButtons, []models.InlineKeyboardButton{
 		{Text: "\u2795 Добавить ещё", CallbackData: "menu_categories"},
-		{Text: "\u2705 Готово", CallbackData: "menu_checkout"},
+		{Text: "➡ Перейти к оплате", CallbackData: "menu_checkout"},
 	})
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -274,6 +290,16 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 			InlineKeyboard: keyboard,
 		},
 	})
+}
+
+func (h *MenuHandler) hasActiveCheckout(telegramID int64) bool {
+	_, data, err := h.fsm.GetState(telegramID, "client")
+	if err != nil {
+		return false
+	}
+	_, hasEvent := data["event_id"]
+	_, hasReservation := data["reservation_id"]
+	return hasEvent || hasReservation
 }
 
 func SendErrorMessage(ctx context.Context, b *bot.Bot, chatID int64) {

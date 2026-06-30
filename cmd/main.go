@@ -265,6 +265,7 @@ func (app *App) handleClientMessage(ctx context.Context, b *bot.Bot, update *mod
 	if update.Message == nil {
 		return
 	}
+	deleteRepliedBotMessage(ctx, b, update.Message)
 	log.Printf("client message: telegram_id=%d text=%q photos=%d document=%t", update.Message.From.ID, update.Message.Text, len(update.Message.Photo), update.Message.Document != nil)
 	if update.Message.Text == "/start" {
 		if app.isClientSpamBlocked(ctx, b, update.Message.Chat.ID, update.Message.From.ID) {
@@ -282,6 +283,15 @@ func (app *App) handleClientMessage(ctx context.Context, b *bot.Bot, update *mod
 			return
 		}
 		app.handleClientText(ctx, b, update)
+	}
+}
+
+func deleteRepliedBotMessage(ctx context.Context, b *bot.Bot, message *models.Message) {
+	if message == nil || message.ReplyToMessage == nil || message.ReplyToMessage.From == nil || !message.ReplyToMessage.From.IsBot {
+		return
+	}
+	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: message.Chat.ID, MessageID: message.ReplyToMessage.ID}); err != nil {
+		log.Printf("failed to delete replied bot message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ReplyToMessage.ID, err)
 	}
 }
 
@@ -349,6 +359,11 @@ func (app *App) handleClientText(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 	log.Printf("ticket input accepted: telegram_id=%d quantity=%d", telegramID, quantity)
+	if messageID, ok := data["ui_message_id"].(float64); ok && messageID > 0 {
+		_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: update.Message.Chat.ID, MessageID: int(messageID)})
+	}
+	_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: update.Message.Chat.ID, MessageID: update.Message.ID})
+	_ = app.fsm.DeleteData(telegramID, "client", "ui_message_id")
 	app.clientReservationHandler.PromptMenuOrPayment(ctx, b, update.Message.Chat.ID, telegramID)
 }
 
@@ -436,6 +451,7 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 	description := app.settingValue("bot_start_description", "Выберите раздел:")
 	avatarURL := app.settingValue("bot_start_avatar", "")
 	siteURL := strings.TrimSpace(app.settingValue("site_url", ""))
+	instagramURL := strings.TrimSpace(app.settingValue("instagram_url", ""))
 	text := strings.TrimSpace(description)
 	if text == "" {
 		text = "Выберите раздел:"
@@ -449,7 +465,10 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 			{Text: "\U0001F511 Забронировать лофт", CallbackData: "reservation_start"},
 		},
 		{
-			{Text: "\U0001F37D Доп. Услуги и Меню", CallbackData: "menu_categories"},
+			{Text: "🍽 Меню", CallbackData: "menu_categories"},
+		},
+		{
+			{Text: "✨ Доп. услуги", CallbackData: "service_categories"},
 		},
 		{
 			{Text: "\U0001F6D2 Корзина", CallbackData: "menu_cart"},
@@ -466,6 +485,10 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 	} else {
 		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "🌐 Сайт", CallbackData: "site_open"}})
 	}
+	if instagramURL != "" {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "📸 Instagram", URL: instagramURL}})
+	}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "📶 Wi-Fi", CallbackData: "wifi_info"}})
 
 	replyMarkup := &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
 	if strings.TrimSpace(avatarURL) != "" {
@@ -725,6 +748,9 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 	if app.isClientSpamBlocked(ctx, b, chatID, telegramID) {
 		return
 	}
+	if shouldReplaceClientMessage(data) {
+		deleteClientCallbackMessage(ctx, b, update)
+	}
 
 	switch {
 	case data == "main_menu":
@@ -733,8 +759,31 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 	case data == "site_open":
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Ссылка на сайт пока не настроена."})
 
+	case data == "wifi_info":
+		wifiName := strings.TrimSpace(app.settingValue("wifi_name", ""))
+		wifiPassword := strings.TrimSpace(app.settingValue("wifi_password", ""))
+		if wifiName == "" && wifiPassword == "" {
+			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Wi-Fi пока не настроен."})
+			return
+		}
+		text := "📶 Wi-Fi"
+		if wifiName != "" {
+			text += "\nНазвание: " + wifiName
+		}
+		if wifiPassword != "" {
+			text += "\nПароль: " + wifiPassword
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text})
+
 	case data == "poster_show":
 		app.clientPosterHandler.ShowList(ctx, b, chatID)
+
+	case strings.HasPrefix(data, "poster_"):
+		parts := strings.Split(data, "_")
+		if len(parts) >= 2 {
+			index, _ := strconv.Atoi(parts[1])
+			app.clientPosterHandler.ShowAt(ctx, b, chatID, index)
+		}
 
 	case strings.HasPrefix(data, "buy_ticket_"):
 		parts := strings.Split(data, "_")
@@ -744,25 +793,30 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 		}
 
 	case data == "menu_categories":
-		app.clientMenuHandler.ShowCategories(ctx, b, chatID)
+		app.clientMenuHandler.ShowCategories(ctx, b, chatID, telegramID, "menu")
+
+	case data == "service_categories":
+		app.clientMenuHandler.ShowCategories(ctx, b, chatID, telegramID, "service")
 
 	case strings.HasPrefix(data, "menu_cat_"):
 		parts := strings.Split(data, "_")
 		if len(parts) >= 3 {
 			catID, _ := strconv.ParseUint(parts[2], 10, 64)
-			app.clientMenuHandler.ShowCategoryItems(ctx, b, chatID, uint(catID))
+			app.clientMenuHandler.ShowCategoryItems(ctx, b, chatID, telegramID, uint(catID))
 		}
 
 	case strings.HasPrefix(data, "menu_add_"):
-		if !app.canUseMenu(ctx, b, chatID, telegramID) {
-			return
-		}
 		parts := strings.Split(data, "_")
 		if len(parts) >= 3 {
 			itemID, _ := strconv.ParseUint(parts[2], 10, 64)
+			item, err := app.menuItemRepo.GetByID(uint(itemID))
+			if err != nil || item == nil || !app.canUseMenuType(ctx, b, chatID, telegramID, item.Category.Type) {
+				return
+			}
 			user, _ := app.userRepo.GetByTelegramID(telegramID)
 			if user != nil {
 				app.clientMenuHandler.AddToCart(ctx, b, chatID, user.ID, uint(itemID), telegramID)
+				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: update.CallbackQuery.ID, Text: "Добавлено в корзину"})
 			}
 		}
 
@@ -850,6 +904,48 @@ func (app *App) canUseMenu(ctx context.Context, b *bot.Bot, chatID int64, telegr
 	return false
 }
 
+func (app *App) canUseMenuType(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, categoryType string) bool {
+	if categoryType != "service" {
+		categoryType = "menu"
+	}
+	_, data, err := app.fsm.GetState(telegramID, "client")
+	if err == nil {
+		if _, hasEvent := data["event_id"]; hasEvent {
+			if categoryType == "menu" {
+				return true
+			}
+			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "К билетам из афиши можно добавить только позиции из меню."})
+			return false
+		}
+		if _, hasReservation := data["reservation_id"]; hasReservation {
+			if categoryType == "service" {
+				return true
+			}
+			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "К бронированию лофта можно добавить только дополнительные услуги."})
+			return false
+		}
+	}
+	user, err := app.userRepo.GetByTelegramID(telegramID)
+	if err != nil || user == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Сначала купите билет или забронируйте лофт."})
+		return false
+	}
+	if categoryType == "menu" {
+		hasTicket, _ := app.orderRepo.HasActiveEventTicket(user.ID)
+		if hasTicket {
+			return true
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Меню доступно при покупке билета на мероприятие."})
+		return false
+	}
+	hasReservation, _ := app.reservationRepo.HasUpcomingReservation(user.ID)
+	if hasReservation {
+		return true
+	}
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Дополнительные услуги доступны при бронировании лофта."})
+	return false
+}
+
 func (app *App) showTicketQuantityPicker(ctx context.Context, b *bot.Bot, chatID, telegramID int64, eventID uint) {
 	event, err := app.eventRepo.GetByID(eventID)
 	log.Printf("ticket prompt: telegram_id=%d event_id=%d err=%v", telegramID, eventID, err)
@@ -857,12 +953,51 @@ func (app *App) showTicketQuantityPicker(ctx context.Context, b *bot.Bot, chatID
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "К сожалению, билеты закончились."})
 		return
 	}
-	if err := app.fsm.SetState(telegramID, "client", "ticket:quantity", map[string]interface{}{"event_id": float64(eventID)}); err != nil {
+	_, existingData, _ := app.fsm.GetState(telegramID, "client")
+	if existingData == nil {
+		existingData = make(map[string]interface{})
+	}
+	for key, value := range existingData {
+		if !strings.HasPrefix(key, "cart_") {
+			continue
+		}
+		item, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if categoryType, _ := item["category_type"].(string); categoryType == "service" {
+			delete(existingData, key)
+		}
+	}
+	existingData["event_id"] = float64(eventID)
+	delete(existingData, "ticket_quantity")
+	if err := app.fsm.SetState(telegramID, "client", "ticket:quantity", existingData); err != nil {
 		log.Printf("ticket prompt state setup failed: telegram_id=%d err=%v", telegramID, err)
 		client.SendErrorMessage(ctx, b, chatID)
 		return
 	}
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("Введите сообщением нужное количество билетов.\n🔥 Осталось мест: %d из %d", event.PlacesLeft, event.TotalPlaces)})
+	message, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("Введите сообщением нужное количество билетов.\n🔥 Осталось мест: %d из %d", event.PlacesLeft, event.TotalPlaces)})
+	if err == nil && message != nil {
+		_ = app.fsm.UpdateData(telegramID, "client", map[string]interface{}{"ui_message_id": float64(message.ID)})
+	}
+}
+
+func shouldReplaceClientMessage(data string) bool {
+	return data == "main_menu" || data == "poster_show" || strings.HasPrefix(data, "poster_") ||
+		strings.HasPrefix(data, "buy_ticket_") || data == "menu_categories" || data == "service_categories" ||
+		strings.HasPrefix(data, "menu_cat_") || strings.HasPrefix(data, "menu_remove_") || data == "menu_cart" ||
+		data == "menu_checkout" || data == "reservation_start" || strings.HasPrefix(data, "res_") ||
+		data == "reservation_confirm" || data == "go_to_payment" || data == "profile_show"
+}
+
+func deleteClientCallbackMessage(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.CallbackQuery == nil || update.CallbackQuery.Message.Message == nil {
+		return
+	}
+	message := update.CallbackQuery.Message.Message
+	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: message.Chat.ID, MessageID: message.ID}); err != nil {
+		log.Printf("failed to replace client message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ID, err)
+	}
 }
 
 func (app *App) handleAdminStart(ctx context.Context, b *bot.Bot, update *models.Update) {

@@ -115,7 +115,7 @@ let periodFilters = {dashboard:{mode:'month',from:'',to:''},events:{mode:'month'
 const pages = [
   { id:'dashboard', label:'\uD83D\uDCCA Дашборд' },
   { id:'events', label:'\uD83C\uDFAD Афиша' },
-  { id:'menu', label:'\uD83C\uDF7D Доп. услуги' },
+  { id:'menu', label:'\uD83C\uDF7D Меню и услуги' },
   { id:'prices', label:'\uD83D\uDCB0 Цены' },
   { id:'orders', label:'\uD83D\uDED2 Заказы' },
   { id:'expenses', label:'\uD83E\uDDFE Расходы' },
@@ -129,7 +129,6 @@ const pages = [
 
 const messageDefs = [
   {key:'message_after_purchase',title:'После покупки',hint:'Пользователь увидит после отправки чека и создания заказа.',def:'⏳ Отлично! Ваш платёж отправлен на проверку.\nМы уведомим вас, как только подтвердим получение средств.\n\nНомер вашего заказа: #{order_id}'},
-  {key:'message_receipt_received',title:'Уведомление о чеке',hint:'Короткое уведомление после загрузки чека.',def:'✅ Чек получен и ожидает подтверждения со стороны администратора. Это может занять некоторое время — не беспокойтесь.'},
   {key:'message_delayed_event',title:'Отложенное сообщение',hint:'Отправляется через 15 минут после покупки билета.',def:'Важная информация про наш бар!\n\n🍹 У нас действует система BYOB.\nПриносите любимые напитки с собой. Пробковый сбор составит {cork_fee}₽ за бутылку (лед и бокалы мы предоставим). Вы можете заранее заказать кальян или напиток со скидкой 15%. Он будет готов точно к вашему приходу.'},
   {key:'message_review_request_event',title:'Отзыв после афиши',hint:'Отправляется после покупки билета. Пользователь выбирает оценку 1-5, затем пишет текст.',def:'Спасибо, что посетили наше мероприятие! Оцените, пожалуйста, впечатления по 5-балльной шкале.'},
   {key:'message_review_request_reservation',title:'Отзыв после брони',hint:'Отправляется после бронирования лофта. Пользователь выбирает оценку 1-5, затем пишет текст.',def:'Спасибо, что бронировали наш лофт! Оцените, пожалуйста, ваш визит по 5-балльной шкале.'},
@@ -141,7 +140,7 @@ const messageDefs = [
   {key:'message_reservation_reminder_60',title:'За 1 час до брони',hint:'Автоматически отправляется за час до начала брони. Плейсхолдеры: {date}, {time_from}, {time_to}.',def:'⏰ До начала вашей брони остался 1 час. Ждём вас {date} в {time_from}.'},
   {key:'message_reservation_reminder_30',title:'За 30 минут до конца брони',hint:'Автоматически отправляется за 30 минут до окончания брони. Плейсхолдеры: {date}, {time_from}, {time_to}.',def:'⏰ До конца вашей брони осталось 30 минут. Время окончания: {time_to}.'},
   {key:'message_reservation_balance_due',title:'Доплата по брони',hint:'Отправляется, когда началось время бронирования и осталась неоплаченная сумма. Плейсхолдеры: {amount}, {total}, {paid}, {date}, {time_from}, {time_to}.',def:'⏰ Ваша бронь началась. Осталось оплатить {amount} ₽ из общей суммы {total} ₽.'},
-  {key:'message_after_payment',title:'После оплаты',hint:'Пользователь получает это сообщение после отправки чека. Плейсхолдеры: {order_id}, {deposit}.',def:'✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.\n\nЗалог: {deposit} ₽.'},
+  {key:'message_after_payment',title:'После оплаты',hint:'Пользователь получает это сообщение после отправки чека. Плейсхолдеры: {order_id}.',def:'✅ Чек получен. Мы проверим оплату и скоро вернёмся с подтверждением.'},
   {key:'message_payment_confirmed',title:'Оплата подтверждена',hint:'Пользователь получает после подтверждения админом.',def:'✅ Оплата подтверждена! Ждем вас {date}, {time} — {title} по адресу: г. Пятигорск, ул. Мира 155А.\n\n🤝 Приходи не один! Перешли это сообщение друзьям. Если кто-то из них тоже купит билет на эту игру, мы бесплатно сделаем вам скидку 50% на кальян на ваш стол или скидку на покупку билетов к следующему мероприятию. Просто скажите на баре, с кем вы пришли!'},
   {key:'message_payment_rejected',title:'Оплата отклонена',hint:'Пользователь получает при отклонении оплаты.',def:'❌ По вашему заказу #{order_id} оплата не была подтверждена.\nЕсли это ошибка, напишите администратору: {admin_contact}'},
 ];
@@ -333,7 +332,9 @@ async function renderMenu(){
         <button class="btn" onclick="showMenuItemModal()">+ Добавить позицию</button>
         <button class="btn btn-secondary" onclick="showAddCategoryModal()">+ Добавить категорию</button>
       </div>`;
-    state.menuCats.forEach(cat=>{
+    ['menu','service'].forEach(type=>{
+      html+=`<h2>${type==='menu'?'🍽 Меню':'✨ Дополнительные услуги'}</h2>`;
+      state.menuCats.filter(cat=>(cat.Type||'menu')===type).forEach(cat=>{
       const items=state.menuItems.filter(i=>i.CategoryID===cat.ID);
       html+=`<div class="card"><div class="flex-between"><b>${cat.ImageURL?`<img src="${escapeHtml(cat.ImageURL)}" alt="" style="width:32px;height:32px;object-fit:cover;border-radius:8px;vertical-align:middle;margin-right:8px">`:cat.Emoji||''} ${escapeHtml(cat.Name)}</b><button class="btn-small btn-secondary" onclick="showAddCategoryModal(${cat.ID})">\u270F</button></div>`;
       if(items.length===0)html+=`<div class="text-hint mt-8">В этой категории пока нет позиций</div>`;
@@ -344,6 +345,7 @@ async function renderMenu(){
           <button class="btn-small btn-danger" onclick="deleteMenuItem(${i.ID})">\uD83D\uDDD1</button></span></div>`;
       });
       html+=`</div>`;
+      });
     });
     $('pageContent').innerHTML=html;
   }catch(e){showToast(e.message)}
@@ -397,11 +399,12 @@ async function showCategoryModal(){
 }
 
 function showAddCategoryModal(id){
-  const category=id?state.menuCats.find(c=>c.ID===id):{Name:'',Emoji:'',ImageURL:'',SortOrder:state.menuCats.length};
+  const category=id?state.menuCats.find(c=>c.ID===id):{Name:'',Type:'menu',Emoji:'',ImageURL:'',SortOrder:state.menuCats.length};
   const m=$('modalContent');
   m.innerHTML=`<h2>${id?'Редактировать':'Добавить'} категорию</h2>
     ${category.ImageURL?`<img src="${escapeHtml(category.ImageURL)}" alt="Обложка категории" style="width:100%;max-height:150px;object-fit:cover;border-radius:12px;margin-bottom:8px">`:''}
     <input class="input" id="catName" placeholder="Название категории" value="${escapeHtml(category.Name)}">
+    <select class="input" id="catType"><option value="menu" ${(category.Type||'menu')==='menu'?'selected':''}>🍽 Меню</option><option value="service" ${category.Type==='service'?'selected':''}>✨ Дополнительные услуги</option></select>
     <input class="input" id="catImage" type="file" accept="image/jpeg,image/png,image/webp">
     <p class="text-hint">Картинка категории — необязательно</p>
     <div class="grid grid-2 mt-8"><button class="btn" onclick="addCategory(${id||''})">\u2705 Сохранить</button><button class="btn btn-secondary" onclick="closeModal()">\u274C Отмена</button></div>${id?`<button class="btn btn-danger" onclick="deleteCategory(${id})">\uD83D\uDDD1 Удалить категорию</button>`:''}`;
@@ -423,7 +426,7 @@ async function addCategory(id){
     let imageURL=existing?.ImageURL||'';
     const image=$('catImage').files[0];
     if(image)imageURL=(await uploadImage(image)).url;
-    const body={Name:name,Emoji:existing?.Emoji||'',ImageURL:imageURL,SortOrder:existing?.SortOrder??state.menuCats.length};
+    const body={Name:name,Type:$('catType').value,Emoji:existing?.Emoji||'',ImageURL:imageURL,SortOrder:existing?.SortOrder??state.menuCats.length};
     await api(id?'PUT':'POST',id?'/menu/categories/'+id:'/menu/categories',body);
     state.menuCats=await api('GET','/menu/categories');
     closeModal();renderMenu();showToast('\u2705 Категория добавлена');
@@ -628,9 +631,12 @@ async function renderSettings(){
         <div class="row"><span>📝 Описание</span><span><button class="btn-small btn-secondary" onclick="showSettingTextModal('bot_start_description','Описание стартового сообщения')">✏</button></span></div>
       </div>
       <div class="card">
-        <div class="row"><span>\uD83D\uDCF2 Номер для оплаты</span><span><button class="btn-small btn-secondary" onclick="showSettingModal('payment_phone','Номер для оплаты','${escapeHtml(getVal('payment_phone'))}')">\u270F</button></span></div>
+        <div class="row"><span>\uD83D\uDCF2 Номера для оплаты</span><span><button class="btn-small btn-secondary" onclick="showSettingTextModal('payment_phone','Номера для оплаты')">\u270F</button></span></div>
         <div class="row"><span>\uD83C\uDFE0 Название лофта</span><span><button class="btn-small btn-secondary" onclick="showSettingModal('loft_name','Название лофта','${escapeHtml(getVal('loft_name'))}')">\u270F</button></span></div>
         <div class="row"><span>🌐 Сайт</span><span>${escapeHtml(getVal('site_url')||'не задан')} <button class="btn-small btn-secondary" onclick="showSettingModal('site_url','Ссылка на сайт','${escapeHtml(getVal('site_url')||'')}')">\u270F</button></span></div>
+        <div class="row"><span>📸 Instagram</span><span>${escapeHtml(getVal('instagram_url')||'не задан')} <button class="btn-small btn-secondary" onclick="showSettingModal('instagram_url','Ссылка на Instagram','${escapeHtml(getVal('instagram_url')||'')}')">\u270F</button></span></div>
+        <div class="row"><span>📶 Wi-Fi: название</span><span>${escapeHtml(getVal('wifi_name')||'не задано')} <button class="btn-small btn-secondary" onclick="showSettingModal('wifi_name','Название Wi-Fi','${escapeHtml(getVal('wifi_name')||'')}')">\u270F</button></span></div>
+        <div class="row"><span>🔑 Wi-Fi: пароль</span><span>${escapeHtml(getVal('wifi_password')||'не задан')} <button class="btn-small btn-secondary" onclick="showSettingModal('wifi_password','Пароль Wi-Fi','${escapeHtml(getVal('wifi_password')||'')}')">\u270F</button></span></div>
         <div class="row"><span>📄 Договор-оферта PDF</span><span>${getVal('offer_pdf_url')?'загружен':'не задан'} <button class="btn-small btn-secondary" onclick="showOfferPdfModal()">\u270F</button></span></div>
         <div class="row"><span>💵 Предоплата, %</span><span>${escapeHtml(getVal('prepayment_percent')||'30')} <button class="btn-small btn-secondary" onclick="showSettingModal('prepayment_percent','Предоплата, %','${escapeHtml(getVal('prepayment_percent')||'30')}')">\u270F</button></span></div>
         <div class="row"><span>\uD83C\uDF7E Пробковый сбор, ₽</span><span>${getVal('cork_fee')||300} <button class="btn-small btn-secondary" onclick="showSettingModal('cork_fee','Пробковый сбор, ₽','${escapeHtml(getVal('cork_fee')||'300')}')">\u270F</button></span></div>

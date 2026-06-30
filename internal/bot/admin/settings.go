@@ -37,13 +37,11 @@ func (h *SettingsHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 		name = loftName.Value
 	}
 
-	text := fmt.Sprintf("\u2699\uFE0F Настройки\n\n\U0001F4F2 Номер для оплаты: %s\n\U0001F3E0 Название лофта: %s",
+	text := fmt.Sprintf("\u2699\uFE0F Настройки\n\n\U0001F4F2 Номера для оплаты: %s\n\U0001F3E0 Название лофта: %s",
 		phone, name)
 
 	keyboard := [][]models.InlineKeyboardButton{
-		{
-			{Text: "\u270F\uFE0F Изменить номер для оплаты", CallbackData: "admin_settings_phone"},
-		},
+		{{Text: "\u270F\uFE0F Изменить номера для оплаты", CallbackData: "admin_settings_phone"}},
 		{
 			{Text: "\u270F\uFE0F Изменить название лофта", CallbackData: "admin_settings_name"},
 		},
@@ -55,7 +53,6 @@ func (h *SettingsHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
-		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},

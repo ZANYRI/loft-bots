@@ -41,6 +41,23 @@ func (h *PosterHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) 
 	h.showEvent(ctx, b, chatID, events, 0)
 }
 
+func (h *PosterHandler) ShowAt(ctx context.Context, b *bot.Bot, chatID int64, index int) {
+	events, err := h.eventRepo.GetActive()
+	if err != nil {
+		log.Printf("failed to get events: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if len(events) == 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "🎭 В настоящее время нет активных мероприятий."})
+		return
+	}
+	if index < 0 || index >= len(events) {
+		index = 0
+	}
+	h.showEvent(ctx, b, chatID, events, index)
+}
+
 func (h *PosterHandler) showEvent(ctx context.Context, b *bot.Bot, chatID int64, events []db.Event, index int) {
 	ev := events[index]
 
@@ -61,22 +78,27 @@ func (h *PosterHandler) showEvent(ctx context.Context, b *bot.Bot, chatID int64,
 	params := &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
-		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
 	}
 
 	if ev.ImageFileID != "" {
-		b.SendPhoto(ctx, &bot.SendPhotoParams{
+		if _, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
 			ChatID:      chatID,
 			Photo:       &models.InputFileString{Data: ev.ImageFileID},
 			Caption:     text,
-			ParseMode:   models.ParseModeHTML,
 			ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
-		})
+		}); err != nil {
+			log.Printf("failed to send event photo: event_id=%d err=%v", ev.ID, err)
+			if _, err := b.SendMessage(ctx, params); err != nil {
+				log.Printf("failed to send event fallback message: event_id=%d err=%v", ev.ID, err)
+			}
+		}
 	} else {
-		b.SendMessage(ctx, params)
+		if _, err := b.SendMessage(ctx, params); err != nil {
+			log.Printf("failed to send event message: event_id=%d err=%v", ev.ID, err)
+		}
 	}
 }
 

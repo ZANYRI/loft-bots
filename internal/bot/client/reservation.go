@@ -453,16 +453,20 @@ func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int
 }
 
 func (h *ReservationHandler) PromptMenuOrPayment(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
-	keyboard := [][]models.InlineKeyboardButton{
-		{
-			{Text: "\U0001F355 Посмотреть Меню", CallbackData: "menu_categories"},
-			{Text: "\u27A1 Продолжить без Меню", CallbackData: "go_to_payment"},
-		},
+	_, data, _ := h.fsm.GetState(telegramID, "client")
+	button := models.InlineKeyboardButton{Text: "🍽 Добавить из меню", CallbackData: "menu_categories"}
+	text := "Хотите добавить позиции из меню к билетам?"
+	if _, isReservation := data["reservation_id"]; isReservation {
+		if _, isEvent := data["event_id"]; !isEvent {
+			button = models.InlineKeyboardButton{Text: "✨ Добавить услугу", CallbackData: "service_categories"}
+			text = "Хотите добавить дополнительные услуги к бронированию?"
+		}
 	}
+	keyboard := [][]models.InlineKeyboardButton{{button}, {{Text: "➡ Продолжить к оплате", CallbackData: "go_to_payment"}}}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "\U0001F37D Хотите добавить Меню к вашему заказу?",
+		Text:   text,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},

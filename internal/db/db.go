@@ -36,6 +36,9 @@ func Connect(dsn string) *gorm.DB {
 	}
 	// Admin-created reservations may be walk-ins without a Telegram user.
 	db.Exec(`ALTER TABLE reservations ALTER COLUMN user_id DROP NOT NULL`)
+	db.Exec(`UPDATE menu_categories SET type = 'menu' WHERE type IS NULL OR type = ''`)
+	db.Exec(`UPDATE menu_categories SET type = 'service' WHERE LOWER(name) LIKE '%доп%услуг%'`)
+	db.Exec(`DELETE FROM settings WHERE key = 'message_receipt_received'`)
 	syncReservationStatusesFromOrders(db)
 	db.Exec(`ALTER TABLE reservations DROP COLUMN IF EXISTS reminder30_sent_at`)
 	db.Exec(`ALTER TABLE reservations DROP COLUMN IF EXISTS reminder60_sent_at`)
@@ -134,6 +137,9 @@ func seedDefaults(db *gorm.DB) {
 		{Key: "admin_contact", Value: "@admin"},
 		{Key: "loft_name", Value: "Название лофта"},
 		{Key: "site_url", Value: ""},
+		{Key: "instagram_url", Value: ""},
+		{Key: "wifi_name", Value: ""},
+		{Key: "wifi_password", Value: ""},
 		{Key: "bot_start_title", Value: "Название лофта"},
 		{Key: "bot_start_description", Value: "Выберите раздел:"},
 		{Key: "bot_start_avatar", Value: ""},

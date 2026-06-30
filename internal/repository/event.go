@@ -17,18 +17,18 @@ func NewEventRepo(db *gorm.DB) *EventRepo {
 
 func (r *EventRepo) GetActive() ([]db.Event, error) {
 	var events []db.Event
-	err := r.db.Where("is_active = ?", true).Order("event_date ASC, time_from ASC").Find(&events).Error
+	err := r.db.Where("is_active = ? AND deleted_at IS NULL", true).Order("event_date ASC, time_from ASC").Find(&events).Error
 	return events, err
 }
 
 func (r *EventRepo) GetAll() ([]db.Event, error) {
 	var events []db.Event
-	err := r.db.Order("event_date DESC").Find(&events).Error
+	err := r.db.Where("deleted_at IS NULL").Order("event_date DESC").Find(&events).Error
 	return events, err
 }
 
 func (r *EventRepo) GetByRange(from, to *time.Time) ([]db.Event, error) {
-	query := r.db
+	query := r.db.Where("deleted_at IS NULL")
 	if from != nil {
 		query = query.Where("event_date >= ?", from.Format("2006-01-02"))
 	}
@@ -59,11 +59,27 @@ func (r *EventRepo) UpdateField(id uint, column string, value interface{}) error
 }
 
 func (r *EventRepo) Delete(id uint) error {
-	return r.db.Delete(&db.Event{}, id).Error
+	now := time.Now()
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Order{}).
+			Where("event_id = ? AND status != ?", id, "cancelled").
+			Updates(map[string]interface{}{
+				"status":         "cancelled",
+				"review_due_at":  nil,
+				"review_sent_at": nil,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&db.Event{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"is_active":   false,
+			"places_left": gorm.Expr("total_places"),
+			"deleted_at":  now,
+		}).Error
+	})
 }
 
 func (r *EventRepo) ReservePlaces(id uint, quantity int) (bool, error) {
-	result := r.db.Model(&db.Event{}).Where("id = ? AND places_left >= ? AND is_active = ?", id, quantity, true).
+	result := r.db.Model(&db.Event{}).Where("id = ? AND places_left >= ? AND is_active = ? AND deleted_at IS NULL", id, quantity, true).
 		Update("places_left", gorm.Expr("places_left - ?", quantity))
 	if result.Error != nil {
 		return false, result.Error
@@ -78,12 +94,12 @@ func (r *EventRepo) ReservePlaces(id uint, quantity int) (bool, error) {
 }
 
 func (r *EventRepo) ReleasePlaces(id uint, quantity int) error {
-	return r.db.Model(&db.Event{}).Where("id = ?", id).Updates(map[string]interface{}{"places_left": gorm.Expr("LEAST(places_left + ?, total_places)", quantity), "is_active": true}).Error
+	return r.db.Model(&db.Event{}).Where("id = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{"places_left": gorm.Expr("LEAST(places_left + ?, total_places)", quantity), "is_active": true}).Error
 }
 
 func (r *EventRepo) ToggleActive(id uint) error {
 	var event db.Event
-	if err := r.db.First(&event, id).Error; err != nil {
+	if err := r.db.Where("deleted_at IS NULL").First(&event, id).Error; err != nil {
 		return err
 	}
 	return r.db.Model(&event).Update("is_active", !event.IsActive).Error

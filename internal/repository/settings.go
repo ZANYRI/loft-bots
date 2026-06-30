@@ -68,6 +68,12 @@ func (r *MenuCategoryRepo) GetAll() ([]db.MenuCategory, error) {
 	return categories, err
 }
 
+func (r *MenuCategoryRepo) GetByType(categoryType string) ([]db.MenuCategory, error) {
+	var categories []db.MenuCategory
+	err := r.db.Where("type = ?", categoryType).Order("sort_order ASC").Find(&categories).Error
+	return categories, err
+}
+
 func (r *MenuCategoryRepo) GetByID(id uint) (*db.MenuCategory, error) {
 	var category db.MenuCategory
 	err := r.db.First(&category, id).Error

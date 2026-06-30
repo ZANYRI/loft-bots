@@ -137,8 +137,14 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 		totalPrice += menuTotal
 	}
 
+	customPhone, _ := data["custom_payment_phone"].(string)
+	displayPhone := paymentPhone
+	if customPhone != "" {
+		displayPhone = customPhone
+	}
+
 	text += fmt.Sprintf("\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001F4B0 Итого: %.0f \u20BD\n\n", totalPrice)
-	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на реквизиты:\n%s\n\n", paymentPhone)
+	text += fmt.Sprintf("\U0001F4F2 Переведите сумму на реквизиты:\n%s\n\n", displayPhone)
 	text += "После оплаты отправьте фото или PDF-чек одним сообщением. \U0001F447"
 	if _, isTicket := data["event_id"]; !isTicket {
 		depositStr := "0"
@@ -155,6 +161,13 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 		{
 			{Text: "\u274C Отмена", CallbackData: "main_menu"},
 		},
+	}
+	if _, isTicket := data["event_id"]; isTicket {
+		extraRow := []models.InlineKeyboardButton{{Text: "\U0001F4DD Ввести другой номер", CallbackData: "payment_custom_phone"}}
+		if customPhone != "" {
+			extraRow = []models.InlineKeyboardButton{{Text: "\U0001F4DD \u2705 Другой номер введён", CallbackData: "noop"}}
+		}
+		keyboard = append([][]models.InlineKeyboardButton{extraRow}, keyboard...)
 	}
 
 	h.fsm.UpdateData(telegramID, "client", map[string]interface{}{

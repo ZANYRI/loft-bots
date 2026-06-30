@@ -49,6 +49,10 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
+	if categoryType == "service" && len(categories) == 1 {
+		h.ShowCategoryItems(ctx, b, chatID, telegramID, categories[0].ID)
+		return
+	}
 
 	rows := make([]models.InlineKeyboardButton, 0)
 	var keyboard [][]models.InlineKeyboardButton
@@ -76,8 +80,8 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 		title = "✨ Дополнительные услуги:"
 	}
 	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text: title,
+		ChatID:    chatID,
+		Text:      title,
 		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,

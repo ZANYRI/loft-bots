@@ -327,6 +327,20 @@ func (app *App) handleClientText(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 	log.Printf("ticket input state: telegram_id=%d state=%q err=%v data=%v", telegramID, currentState, err, data)
+
+	if err == nil && currentState == "payment:phone" {
+		phone := strings.TrimSpace(update.Message.Text)
+		data["custom_payment_phone"] = phone
+		if err := app.fsm.SetState(telegramID, "client", "payment:receipt", data); err != nil {
+			log.Printf("failed to set payment receipt state: %v", err)
+		}
+		if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: update.Message.Chat.ID, MessageID: update.Message.ID}); err != nil {
+			log.Printf("failed to delete user phone message: %v", err)
+		}
+		app.clientPaymentHandler.ShowPayment(ctx, b, update.Message.Chat.ID, telegramID)
+		return
+	}
+
 	if err != nil || currentState != "ticket:quantity" {
 		return
 	}
@@ -773,7 +787,13 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 		if wifiPassword != "" {
 			text += "\nПароль: " + wifiPassword
 		}
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text})
+		kb := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "◀️ Назад", CallbackData: "main_menu"}},
+		}}
+		message, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ReplyMarkup: kb})
+		if err == nil && message != nil {
+			_ = app.fsm.UpdateData(telegramID, "client", map[string]interface{}{"ui_message_id": float64(message.ID)})
+		}
 
 	case data == "poster_show":
 		app.clientPosterHandler.ShowList(ctx, b, chatID)
@@ -849,6 +869,11 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 
 	case data == "go_to_payment":
 		app.clientPaymentHandler.ShowPayment(ctx, b, chatID, telegramID)
+
+	case data == "payment_custom_phone":
+		_, data, _ := app.fsm.GetState(telegramID, "client")
+		app.fsm.SetState(telegramID, "client", "payment:phone", data)
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Отправьте номер телефона или реквизиты для оплаты одним сообщением."})
 
 	case strings.HasPrefix(data, "payment_done_"):
 		app.clientPaymentHandler.RequestReceipt(ctx, b, chatID, telegramID)
@@ -971,6 +996,7 @@ func (app *App) showTicketQuantityPicker(ctx context.Context, b *bot.Bot, chatID
 	}
 	existingData["event_id"] = float64(eventID)
 	delete(existingData, "ticket_quantity")
+	delete(existingData, "custom_payment_phone")
 	if err := app.fsm.SetState(telegramID, "client", "ticket:quantity", existingData); err != nil {
 		log.Printf("ticket prompt state setup failed: telegram_id=%d err=%v", telegramID, err)
 		client.SendErrorMessage(ctx, b, chatID)
@@ -987,7 +1013,8 @@ func shouldReplaceClientMessage(data string) bool {
 		strings.HasPrefix(data, "buy_ticket_") || data == "menu_categories" || data == "service_categories" ||
 		strings.HasPrefix(data, "menu_cat_") || strings.HasPrefix(data, "menu_remove_") || data == "menu_cart" ||
 		data == "menu_checkout" || data == "reservation_start" || strings.HasPrefix(data, "res_") ||
-		data == "reservation_confirm" || data == "go_to_payment" || data == "profile_show"
+		data == "reservation_confirm" || data == "go_to_payment" || data == "profile_show" || data == "wifi_info" ||
+		data == "payment_custom_phone"
 }
 
 func deleteClientCallbackMessage(ctx context.Context, b *bot.Bot, update *models.Update) {

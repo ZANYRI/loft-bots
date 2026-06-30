@@ -77,13 +77,7 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 	}
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text: `🍷 Правила по алкоголю (BYOB)
-Пробковый сбор — 300₽/бутылка. Мы предоставим лед, красивые бокалы и сервис.
-
-🔥 Секретная акция:
-Забронируйте дополнительные услуги прямо сейчас, и мы сделаем скидку 15%. Мы все подготовим к Вашему приходу!
-
-` + title,
+		Text: title,
 		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,

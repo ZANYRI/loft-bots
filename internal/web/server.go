@@ -187,6 +187,9 @@ func (s *Server) runBroadcast(users []db.User, message string, event *db.Event) 
 		s.broadcastMu.Lock()
 		s.broadcastActive = false
 		s.broadcastMu.Unlock()
+		if r := recover(); r != nil {
+			log.Printf("broadcast panic: %v", r)
+		}
 	}()
 	sent, failed := 0, 0
 	for _, user := range users {
@@ -1142,6 +1145,14 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, userID int6
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	fromStr, toStr := "nil", "nil"
+	if from != nil {
+		fromStr = from.Format("2006-01-02")
+	}
+	if to != nil {
+		toStr = to.Format("2006-01-02")
+	}
+	log.Printf("dashboard stats: period=%s from=%s to=%s", period, fromStr, toStr)
 	stats, err := s.orderRepo.GetStats(period, from, to)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})

@@ -52,7 +52,7 @@ func (r *ExpenseRepo) TotalForPeriod(period string) (float64, error) {
 	case "week":
 		query = query.Where("created_at >= ?", now.AddDate(0, 0, -7))
 	case "month":
-		query = query.Where("created_at >= ?", now.AddDate(0, -1, 0))
+		query = query.Where("created_at >= ?", time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()))
 	}
 
 	var total float64

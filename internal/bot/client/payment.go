@@ -293,7 +293,7 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 		}},
 	})
 
-	if eventID != nil {
+	if eventID != nil || reservationID != nil {
 		corkFee := "300"
 		if setting, err := h.settingsRepo.Get("cork_fee"); err == nil && setting != nil {
 			corkFee = setting.Value

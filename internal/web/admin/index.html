@@ -216,11 +216,11 @@ async function renderDashboard(){
     $('pageContent').innerHTML=`
       ${periodFilter('dashboard')}
       <div class="card"><div class="grid grid-2 dashboard-stats">
-        <div class="text-center"><div style="font-size:24px;font-weight:700">${(stats.total_revenue||0).toLocaleString('ru')} \u20BD</div><div class="text-hint">Доход за месяц</div></div>
+        <div class="text-center"><div style="font-size:24px;font-weight:700">${(stats.total_revenue||0).toLocaleString('ru')} \u20BD</div><div class="text-hint">Доход${periodFilters.dashboard.mode==='custom'?' за период':' за месяц'}</div></div>
         <div class="text-center"><div style="font-size:24px;font-weight:700">${stats.total_orders||0}</div><div class="text-hint">Заказов</div></div>
         <div class="text-center"><div style="font-size:18px;font-weight:600">${stats.unique_users||0}</div><div class="text-hint">Клиентов</div></div>
         <div class="text-center"><div style="font-size:18px">\u2705 ${stats.confirmed||0} / \u23F3 ${stats.pending||0} / \u274C ${stats.cancelled||0}</div><div class="text-hint">Подтв / Ожид / Отм</div></div>
-        <div class="text-center"><div style="font-size:24px;font-weight:700;color:#e66969">−${(stats.total_expenses||0).toLocaleString('ru')} \u20BD</div><div class="text-hint">Расходы за месяц</div></div>
+        <div class="text-center"><div style="font-size:24px;font-weight:700;color:#e66969">−${(stats.total_expenses||0).toLocaleString('ru')} \u20BD</div><div class="text-hint">Расходы${periodFilters.dashboard.mode==='custom'?' за период':' за месяц'}</div></div>
         <div class="text-center"><div style="font-size:24px;font-weight:700;color:#44a778">${(stats.net_profit||0).toLocaleString('ru')} \u20BD</div><div class="text-hint">Чистая прибыль</div></div>
       </div></div>
       <div class="card"><b>По типам:</b><br>

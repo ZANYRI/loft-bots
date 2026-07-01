@@ -117,7 +117,7 @@ func (r *OrderRepo) GetStats(period string, from, to *time.Time) (map[string]int
 		case "week":
 			query = query.Where("orders.created_at >= ?", now.AddDate(0, 0, -7))
 		case "month":
-			query = query.Where("orders.created_at >= ?", now.AddDate(0, -1, 0))
+			query = query.Where("orders.created_at >= ?", time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()))
 		}
 	}
 
@@ -136,7 +136,7 @@ func (r *OrderRepo) GetStats(period string, from, to *time.Time) (map[string]int
 		COUNT(*) as total_orders,
 		COALESCE(SUM(CASE WHEN orders.status IN ('confirmed', 'prepaid') AND (orders.reservation_id IS NULL OR reservations.status != 'cancelled') THEN 1 ELSE 0 END), 0) as confirmed,
 		COALESCE(SUM(CASE WHEN orders.status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
-		COALESCE(SUM(CASE WHEN orders.status = 'cancelled' OR reservations.status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
+		COALESCE(SUM(CASE WHEN orders.status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
 		COUNT(DISTINCT orders.user_id) as unique_users
 	`).Scan(&result)
 
@@ -162,7 +162,7 @@ func (r *OrderRepo) GetStats(period string, from, to *time.Time) (map[string]int
 	} else if period == "week" {
 		revenueQuery = revenueQuery.Where("orders.created_at >= ?", now.AddDate(0, 0, -7))
 	} else if period == "month" {
-		revenueQuery = revenueQuery.Where("orders.created_at >= ?", now.AddDate(0, -1, 0))
+		revenueQuery = revenueQuery.Where("orders.created_at >= ?", time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()))
 	}
 	if to != nil {
 		revenueQuery = revenueQuery.Where("orders.created_at < ?", to.AddDate(0, 0, 1))
@@ -182,7 +182,7 @@ func (r *OrderRepo) GetStats(period string, from, to *time.Time) (map[string]int
 	} else if period == "week" {
 		manualQuery = manualQuery.Where("date >= ?", now.AddDate(0, 0, -7).Format("2006-01-02"))
 	} else if period == "month" {
-		manualQuery = manualQuery.Where("date >= ?", now.AddDate(0, -1, 0).Format("2006-01-02"))
+		manualQuery = manualQuery.Where("date >= ?", time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02"))
 	}
 	if to != nil {
 		manualQuery = manualQuery.Where("date <= ?", to.Format("2006-01-02"))

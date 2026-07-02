@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +21,8 @@ import (
 	"time"
 
 	"loft-bots/internal/db"
+	"loft-bots/internal/logger"
+	"loft-bots/internal/metrics"
 	"loft-bots/internal/notify"
 	"loft-bots/internal/repository"
 
@@ -130,6 +131,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/reservations/", s.withAuth(s.handleReservationAction))
 	s.mux.HandleFunc("/api/admin/schedule/", s.withAuth(s.handleSchedule))
 	s.mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.uploadDir))))
+	s.mux.Handle("/metrics", metrics.Handler())
 	s.mux.HandleFunc("/", s.handleStatic)
 }
 
@@ -188,7 +190,7 @@ func (s *Server) runBroadcast(users []db.User, message string, event *db.Event) 
 		s.broadcastActive = false
 		s.broadcastMu.Unlock()
 		if r := recover(); r != nil {
-			log.Printf("broadcast panic: %v", r)
+			logger.Printf("broadcast panic: %v", r)
 		}
 	}()
 	sent, failed := 0, 0
@@ -204,13 +206,13 @@ func (s *Server) runBroadcast(users []db.User, message string, event *db.Event) 
 		}
 		if err != nil {
 			failed++
-			log.Printf("broadcast failed: telegram_id=%d err=%v", user.TelegramID, err)
+			logger.Printf("broadcast failed: telegram_id=%d err=%v", user.TelegramID, err)
 		} else {
 			sent++
 		}
 		time.Sleep(40 * time.Millisecond)
 	}
-	log.Printf("broadcast completed: sent=%d failed=%d", sent, failed)
+	logger.Printf("broadcast completed: sent=%d failed=%d", sent, failed)
 }
 
 func (s *Server) sendEventAnnouncement(ctx context.Context, chatID int64, event *db.Event) error {
@@ -238,8 +240,8 @@ func (s *Server) Handle(pattern string, handler http.Handler) {
 
 func (s *Server) Start() error {
 	addr := ":" + s.port
-	log.Printf("web server starting on %s", addr)
-	return http.ListenAndServe(addr, corsMiddleware(s.mux))
+	logger.Printf("web server starting on %s", addr)
+	return http.ListenAndServe(addr, corsMiddleware(observabilityMiddleware(s.mux)))
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -252,6 +254,40 @@ func corsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rec *statusRecorder) WriteHeader(status int) {
+	rec.status = status
+	rec.ResponseWriter.WriteHeader(status)
+}
+
+// observabilityMiddleware logs every HTTP request as structured JSON and
+// records it in Prometheus metrics (skips /metrics itself to avoid noise).
+func observabilityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		duration := time.Since(start)
+
+		metrics.ObserveHTTP(r.Method, r.URL.Path, rec.status, start)
+		logger.Info("http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration_ms", duration.Milliseconds(),
+			"remote_addr", r.RemoteAddr,
+		)
 	})
 }
 
@@ -1152,7 +1188,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, userID int6
 	if to != nil {
 		toStr = to.Format("2006-01-02")
 	}
-	log.Printf("dashboard stats: period=%s from=%s to=%s", period, fromStr, toStr)
+	logger.Printf("dashboard stats: period=%s from=%s to=%s", period, fromStr, toStr)
 	stats, err := s.orderRepo.GetStats(period, from, to)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -1194,7 +1230,7 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request, userID i
 		}
 		paid, err := s.orderRepo.PrepaidByReservationID(reservations[i].ID)
 		if err != nil {
-			log.Printf("failed to calculate reservation payment: reservation_id=%d err=%v", reservations[i].ID, err)
+			logger.Printf("failed to calculate reservation payment: reservation_id=%d err=%v", reservations[i].ID, err)
 			continue
 		}
 		reservations[i].PaidAmount = paid

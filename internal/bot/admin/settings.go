@@ -3,7 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -51,8 +51,8 @@ func (h *SettingsHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    chatID,
-		Text:      text,
+		ChatID: chatID,
+		Text:   text,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
@@ -89,7 +89,7 @@ func (h *SettingsHandler) StartEditName(ctx context.Context, b *bot.Bot, chatID 
 
 func (h *SettingsHandler) HandleNewPhone(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, phone string) {
 	if err := h.settingsRepo.Set("payment_phone", phone); err != nil {
-		log.Printf("failed to update phone: %v", err)
+		logger.Printf("failed to update phone: %v", err)
 		SendAdminError(ctx, b, chatID)
 		return
 	}
@@ -103,7 +103,7 @@ func (h *SettingsHandler) HandleNewPhone(ctx context.Context, b *bot.Bot, chatID
 
 func (h *SettingsHandler) HandleNewName(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, name string) {
 	if err := h.settingsRepo.Set("loft_name", name); err != nil {
-		log.Printf("failed to update loft name: %v", err)
+		logger.Printf("failed to update loft name: %v", err)
 		SendAdminError(ctx, b, chatID)
 		return
 	}

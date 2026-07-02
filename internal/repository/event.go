@@ -96,11 +96,3 @@ func (r *EventRepo) ReservePlaces(id uint, quantity int) (bool, error) {
 func (r *EventRepo) ReleasePlaces(id uint, quantity int) error {
 	return r.db.Model(&db.Event{}).Where("id = ? AND deleted_at IS NULL", id).Updates(map[string]interface{}{"places_left": gorm.Expr("LEAST(places_left + ?, total_places)", quantity), "is_active": true}).Error
 }
-
-func (r *EventRepo) ToggleActive(id uint) error {
-	var event db.Event
-	if err := r.db.Where("deleted_at IS NULL").First(&event, id).Error; err != nil {
-		return err
-	}
-	return r.db.Model(&event).Update("is_active", !event.IsActive).Error
-}

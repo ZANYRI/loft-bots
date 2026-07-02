@@ -3,12 +3,13 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"strings"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"loft-bots/internal/metrics"
 	"loft-bots/internal/notify"
 	"loft-bots/internal/repository"
 )
@@ -34,7 +35,7 @@ func NewOrdersHandler(orderRepo *repository.OrderRepo, eventRepo *repository.Eve
 func (h *OrdersHandler) HandleConfirm(ctx context.Context, b *bot.Bot, chatID int64, orderID uint) {
 	order, err := h.orderRepo.GetByID(orderID)
 	if err != nil {
-		log.Printf("failed to get order: %v", err)
+		logger.Printf("failed to get order: %v", err)
 		return
 	}
 	newStatus := "confirmed"
@@ -42,12 +43,12 @@ func (h *OrdersHandler) HandleConfirm(ctx context.Context, b *bot.Bot, chatID in
 		newStatus = "prepaid"
 	}
 	if err := h.orderRepo.UpdateStatus(orderID, newStatus); err != nil {
-		log.Printf("failed to confirm order: %v", err)
+		logger.Printf("failed to confirm order: %v", err)
 		return
 	}
 	if order.ReservationID != nil {
 		if err := h.reservationRepo.UpdateStatus(*order.ReservationID, "confirmed"); err != nil {
-			log.Printf("failed to confirm reservation: %v", err)
+			logger.Printf("failed to confirm reservation: %v", err)
 			return
 		}
 	}
@@ -61,6 +62,9 @@ func (h *OrdersHandler) HandleConfirm(ctx context.Context, b *bot.Bot, chatID in
 		values["title"] = order.Event.Title
 	}
 	notify.SendToUser(ctx, h.clientBot, order.User.TelegramID, renderMessage(message, values))
+	notify.DeleteOrderMessages(ctx, b, orderID)
+	metrics.OrdersResolvedTotal.WithLabelValues("confirmed").Inc()
+	logger.Info("order confirmed", "order_id", orderID)
 	if order.ReservationID != nil {
 		if setting, err := h.settingsRepo.Get("offer_pdf_url"); err == nil && setting != nil && strings.TrimSpace(setting.Value) != "" {
 			if _, err := h.clientBot.SendDocument(ctx, &bot.SendDocumentParams{
@@ -68,7 +72,7 @@ func (h *OrdersHandler) HandleConfirm(ctx context.Context, b *bot.Bot, chatID in
 				Document: &models.InputFileString{Data: strings.TrimSpace(setting.Value)},
 				Caption:  "Договор-оферта",
 			}); err != nil {
-				log.Printf("failed to send offer pdf: %v", err)
+				logger.Printf("failed to send offer pdf: %v", err)
 			}
 		}
 	}
@@ -82,7 +86,7 @@ func (h *OrdersHandler) HandleConfirm(ctx context.Context, b *bot.Bot, chatID in
 func (h *OrdersHandler) HandleReject(ctx context.Context, b *bot.Bot, chatID int64, orderID uint) {
 	order, err := h.orderRepo.GetByID(orderID)
 	if err != nil {
-		log.Printf("failed to get order: %v", err)
+		logger.Printf("failed to get order: %v", err)
 		return
 	}
 	if order.Status == "pending" && order.EventID != nil {
@@ -91,24 +95,24 @@ func (h *OrdersHandler) HandleReject(ctx context.Context, b *bot.Bot, chatID int
 			quantity = 1
 		}
 		if err := h.eventRepo.ReleasePlaces(*order.EventID, quantity); err != nil {
-			log.Printf("failed to return ticket places: %v", err)
+			logger.Printf("failed to return ticket places: %v", err)
 			return
 		}
 	}
 	if err := h.orderRepo.UpdateStatus(orderID, "cancelled"); err != nil {
-		log.Printf("failed to reject order: %v", err)
+		logger.Printf("failed to reject order: %v", err)
 		return
 	}
 	if order.ReservationID != nil {
 		if err := h.reservationRepo.Cancel(*order.ReservationID); err != nil {
-			log.Printf("failed to cancel reservation: %v", err)
+			logger.Printf("failed to cancel reservation: %v", err)
 			return
 		}
 	}
 
 	order, err = h.orderRepo.GetByID(orderID)
 	if err != nil {
-		log.Printf("failed to get order: %v", err)
+		logger.Printf("failed to get order: %v", err)
 		return
 	}
 
@@ -121,6 +125,9 @@ func (h *OrdersHandler) HandleReject(ctx context.Context, b *bot.Bot, chatID int
 		"order_id":      fmt.Sprintf("%05d", orderID),
 		"admin_contact": contact,
 	}))
+	notify.DeleteOrderMessages(ctx, b, orderID)
+	metrics.OrdersResolvedTotal.WithLabelValues("rejected").Inc()
+	logger.Info("order rejected", "order_id", orderID)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
@@ -147,7 +154,7 @@ func renderMessage(template string, values map[string]string) string {
 func (h *OrdersHandler) ShowNewOrders(ctx context.Context, b *bot.Bot, chatID int64) {
 	orders, err := h.orderRepo.GetPending()
 	if err != nil {
-		log.Printf("failed to get pending orders: %v", err)
+		logger.Printf("failed to get pending orders: %v", err)
 		return
 	}
 

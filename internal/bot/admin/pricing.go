@@ -3,7 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"strconv"
 
 	"github.com/go-telegram/bot"
@@ -28,13 +28,13 @@ func NewPricingHandler(rentalPriceRepo *repository.RentalPriceRepo, fsm *state.F
 func (h *PricingHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 	weekday, err := h.rentalPriceRepo.GetByDayType("weekday")
 	if err != nil {
-		log.Printf("failed to get weekday price: %v", err)
+		logger.Printf("failed to get weekday price: %v", err)
 		return
 	}
 
 	weekend, err := h.rentalPriceRepo.GetByDayType("weekend")
 	if err != nil {
-		log.Printf("failed to get weekend price: %v", err)
+		logger.Printf("failed to get weekend price: %v", err)
 		return
 	}
 
@@ -66,7 +66,7 @@ func (h *PricingHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 func (h *PricingHandler) StartEdit(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, dayType string) {
 	price, err := h.rentalPriceRepo.GetByDayType(dayType)
 	if err != nil {
-		log.Printf("failed to get price: %v", err)
+		logger.Printf("failed to get price: %v", err)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (h *PricingHandler) HandleNewPrice(ctx context.Context, b *bot.Bot, chatID 
 func (h *PricingHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "admin")
 	if err != nil {
-		log.Printf("no price data: %v", err)
+		logger.Printf("no price data: %v", err)
 		return
 	}
 
@@ -137,7 +137,7 @@ func (h *PricingHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, tel
 	newPrice, _ := data["new_price"].(float64)
 
 	if err := h.rentalPriceRepo.Update(dayType, newPrice); err != nil {
-		log.Printf("failed to update price: %v", err)
+		logger.Printf("failed to update price: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "\u274C Ошибка при сохранении.",

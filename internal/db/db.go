@@ -1,26 +1,27 @@
 package db
 
 import (
-	"log"
 	"os"
+
+	"loft-bots/internal/logger"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func Connect(dsn string) *gorm.DB {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger: gormlogger.Default.LogMode(gormlogger.Warn),
 	})
 	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
+		logger.Fatalf("failed to connect database: %v", err)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatalf("failed to get sql.DB: %v", err)
+		logger.Fatalf("failed to get sql.DB: %v", err)
 	}
 
 	sqlDB.SetMaxOpenConns(25)
@@ -32,7 +33,7 @@ func Connect(dsn string) *gorm.DB {
 	migrateUserStatesPrimaryKey(db)
 
 	if err := AutoMigrate(db); err != nil {
-		log.Fatalf("failed to auto-migrate: %v", err)
+		logger.Fatalf("failed to auto-migrate: %v", err)
 	}
 	// Admin-created reservations may be walk-ins without a Telegram user.
 	db.Exec(`ALTER TABLE reservations ALTER COLUMN user_id DROP NOT NULL`)
@@ -61,13 +62,13 @@ func Connect(dsn string) *gorm.DB {
 
 func lockMigrations(db *gorm.DB) {
 	if err := db.Exec("SELECT pg_advisory_lock(?)", int64(424242)).Error; err != nil {
-		log.Printf("failed to lock migrations: %v", err)
+		logger.Printf("failed to lock migrations: %v", err)
 	}
 }
 
 func unlockMigrations(db *gorm.DB) {
 	if err := db.Exec("SELECT pg_advisory_unlock(?)", int64(424242)).Error; err != nil {
-		log.Printf("failed to unlock migrations: %v", err)
+		logger.Printf("failed to unlock migrations: %v", err)
 	}
 }
 
@@ -96,7 +97,7 @@ BEGIN
 	END IF;
 END $$;`
 	if err := db.Exec(query).Error; err != nil {
-		log.Printf("failed to migrate user_states primary key: %v", err)
+		logger.Printf("failed to migrate user_states primary key: %v", err)
 	}
 }
 
@@ -117,7 +118,7 @@ func syncReservationStatusesFromOrders(db *gorm.DB) {
 	}
 	for _, query := range queries {
 		if err := db.Exec(query).Error; err != nil {
-			log.Printf("failed to sync reservation statuses: %v", err)
+			logger.Printf("failed to sync reservation statuses: %v", err)
 		}
 	}
 }
@@ -184,7 +185,7 @@ func seedDefaults(db *gorm.DB) {
 func GetDSN() string {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("DATABASE_URL is not set")
+		logger.Fatal("DATABASE_URL is not set")
 	}
 	return dsn
 }

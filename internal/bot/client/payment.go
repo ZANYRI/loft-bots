@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"loft-bots/internal/logger"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +19,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"loft-bots/internal/db"
+	"loft-bots/internal/metrics"
 	"loft-bots/internal/notify"
 	"loft-bots/internal/repository"
 	"loft-bots/internal/state"
@@ -60,7 +61,7 @@ func NewPaymentHandler(
 func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "client")
 	if err != nil {
-		log.Printf("no payment data found: %v", err)
+		logger.Printf("no payment data found: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -201,14 +202,14 @@ func (h *PaymentHandler) ShowPayment(ctx context.Context, b *bot.Bot, chatID int
 func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "client")
 	if err != nil {
-		log.Printf("no payment data: %v", err)
+		logger.Printf("no payment data: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
 
 	user, err := h.userRepo.FindOrCreate(telegramID, "")
 	if err != nil {
-		log.Printf("failed to find user: %v", err)
+		logger.Printf("failed to find user: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -253,10 +254,20 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 	}
 
 	if err := h.orderRepo.Create(order); err != nil {
-		log.Printf("failed to create order: %v", err)
+		logger.Printf("failed to create order: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
+
+	orderType := "menu"
+	switch {
+	case eventID != nil:
+		orderType = "ticket"
+	case reservationID != nil:
+		orderType = "reservation"
+	}
+	metrics.OrdersCreatedTotal.WithLabelValues(orderType).Inc()
+	logger.Info("order created", "order_id", order.ID, "type", orderType, "total_price", order.TotalPrice, "user_id", user.ID)
 
 	for key, val := range data {
 		if len(key) > 5 && key[:5] == "cart_" {
@@ -276,7 +287,8 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 	}
 
 	orderText := h.buildOrderText(order, data, user.Username)
-	notify.SendToAdmins(ctx, h.adminBot, orderText, h.buildAdminKeyboard(order.ID))
+	sentMessages := notify.SendToAdmins(ctx, h.adminBot, orderText, h.buildAdminKeyboard(order.ID))
+	notify.RegisterOrderMessages(order.ID, sentMessages)
 
 	h.fsm.ClearState(telegramID, "client")
 
@@ -307,7 +319,7 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 	}
 	dueAt := reviewDueAtAfter(h.reviewBaseTime(eventID, reservationID), h.settingInt("message_review_day_offset", 1), h.settingValue("message_review_next_day_time", "12:00"))
 	if err := h.orderRepo.SetReviewDueAt(order.ID, dueAt); err != nil {
-		log.Printf("failed to set review due time: order_id=%d err=%v", order.ID, err)
+		logger.Printf("failed to set review due time: order_id=%d err=%v", order.ID, err)
 	}
 }
 
@@ -356,7 +368,7 @@ func (h *PaymentHandler) HandleReceipt(ctx context.Context, b *bot.Bot, chatID i
 		if url, err := saveTelegramReceipt(fileID); err == nil {
 			h.fsm.UpdateData(telegramID, "client", map[string]interface{}{"receipt_url": url})
 		} else {
-			log.Printf("failed to save receipt: %v", err)
+			logger.Printf("failed to save receipt: %v", err)
 		}
 	}
 	h.HandlePaymentDone(ctx, b, chatID, telegramID)

@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -45,7 +45,7 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 	}
 	categories, err := h.menuCatRepo.GetByType(categoryType)
 	if err != nil {
-		log.Printf("failed to get categories: %v", err)
+		logger.Printf("failed to get categories: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -92,14 +92,14 @@ func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int
 func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, categoryID uint) {
 	items, err := h.menuItemRepo.GetByCategoryID(categoryID)
 	if err != nil {
-		log.Printf("failed to get items: %v", err)
+		logger.Printf("failed to get items: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
 
 	cat, err := h.menuCatRepo.GetByID(categoryID)
 	if err != nil {
-		log.Printf("failed to get category: %v", err)
+		logger.Printf("failed to get category: %v", err)
 		return
 	}
 
@@ -156,7 +156,7 @@ func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID 
 		if err == nil {
 			return
 		}
-		log.Printf("failed to send category cover: %v", err)
+		logger.Printf("failed to send category cover: %v", err)
 	}
 	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ParseMode: models.ParseModeHTML, ReplyMarkup: replyMarkup})
 }
@@ -164,7 +164,7 @@ func (h *MenuHandler) ShowCategoryItems(ctx context.Context, b *bot.Bot, chatID 
 func (h *MenuHandler) AddToCart(ctx context.Context, b *bot.Bot, chatID int64, userID uint, menuItemID uint, telegramID int64) {
 	item, err := h.menuItemRepo.GetByID(menuItemID)
 	if err != nil {
-		log.Printf("failed to get menu item: %v", err)
+		logger.Printf("failed to get menu item: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -180,7 +180,7 @@ func (h *MenuHandler) AddToCart(ctx context.Context, b *bot.Bot, chatID int64, u
 	if err := h.fsm.UpdateData(telegramID, "client", map[string]interface{}{
 		key: map[string]interface{}{"item_id": menuItemID, "name": item.Name, "price": item.Price, "qty": qty, "category_type": item.Category.Type},
 	}); err != nil {
-		log.Printf("failed to add item to cart: %v", err)
+		logger.Printf("failed to add item to cart: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -202,14 +202,14 @@ func (h *MenuHandler) RemoveFromCart(ctx context.Context, b *bot.Bot, chatID int
 	qty, _ := item["qty"].(float64)
 	if qty <= 1 {
 		if err := h.fsm.DeleteData(telegramID, "client", key); err != nil {
-			log.Printf("failed to remove cart item: %v", err)
+			logger.Printf("failed to remove cart item: %v", err)
 			SendErrorMessage(ctx, b, chatID)
 			return
 		}
 	} else {
 		item["qty"] = qty - 1
 		if err := h.fsm.UpdateData(telegramID, "client", map[string]interface{}{key: item}); err != nil {
-			log.Printf("failed to decrease cart item: %v", err)
+			logger.Printf("failed to decrease cart item: %v", err)
 			SendErrorMessage(ctx, b, chatID)
 			return
 		}

@@ -3,7 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"strings"
 	"time"
 
@@ -71,7 +71,7 @@ func (h *ScheduleHandler) ShowFiltered(ctx context.Context, b *bot.Bot, chatID i
 	}
 
 	if err != nil {
-		log.Printf("failed to get reservations: %v", err)
+		logger.Printf("failed to get reservations: %v", err)
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *ScheduleHandler) ShowFiltered(ctx context.Context, b *bot.Bot, chatID i
 func (h *ScheduleHandler) HandleCancel(ctx context.Context, b *bot.Bot, chatID int64, reservationID uint) {
 	reservation, err := h.reservationRepo.GetByID(reservationID)
 	if err != nil {
-		log.Printf("failed to get reservation: %v", err)
+		logger.Printf("failed to get reservation: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Бронь не найдена."})
 		return
 	}
@@ -150,12 +150,12 @@ func (h *ScheduleHandler) HandleCancel(ctx context.Context, b *bot.Bot, chatID i
 		return
 	}
 	if err := h.reservationRepo.Cancel(reservationID); err != nil {
-		log.Printf("failed to cancel reservation: %v", err)
+		logger.Printf("failed to cancel reservation: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Не удалось отменить бронь."})
 		return
 	}
 	if err := h.orderRepo.CancelByReservationID(reservationID); err != nil {
-		log.Printf("failed to cancel reservation orders: %v", err)
+		logger.Printf("failed to cancel reservation orders: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Бронь отменена, но связанные заказы не удалось отменить."})
 		return
 	}

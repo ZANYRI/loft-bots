@@ -14,16 +14,16 @@ type User struct {
 }
 
 type Event struct {
-	ID          uint      `gorm:"primaryKey"`
-	Title       string    `gorm:"size:255;not null"`
-	Description string    `gorm:"type:text"`
-	ImageFileID string    `gorm:"size:512"`
-	EventDate   time.Time `gorm:"type:date;not null"`
-	TimeFrom    string    `gorm:"size:5;not null"`
-	TimeTo      string    `gorm:"size:5;not null"`
-	Price       float64   `gorm:"type:decimal(10,2);not null"`
-	TotalPlaces int       `gorm:"not null;default:20"`
-	PlacesLeft  int       `gorm:"not null;default:20"`
+	ID           uint      `gorm:"primaryKey"`
+	Title        string    `gorm:"size:255;not null"`
+	Description  string    `gorm:"type:text"`
+	ImageFileID  string    `gorm:"size:512"`
+	EventDate    time.Time `gorm:"type:date;not null"`
+	TimeFrom     string    `gorm:"size:5;not null"`
+	TimeTo       string    `gorm:"size:5;not null"`
+	Price        float64   `gorm:"type:decimal(10,2);not null"`
+	TotalPlaces  int       `gorm:"not null;default:20"`
+	PlacesLeft   int       `gorm:"not null;default:20"`
 	PaymentPhone string    `gorm:"size:255"`
 	IsActive     bool      `gorm:"default:true"`
 	CreatedAt    time.Time

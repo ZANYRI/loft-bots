@@ -3,7 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -50,7 +50,7 @@ func (h *StatsHandler) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 func (h *StatsHandler) ShowPeriod(ctx context.Context, b *bot.Bot, chatID int64, period string) {
 	stats, err := h.orderRepo.GetStats(period, nil, nil)
 	if err != nil {
-		log.Printf("failed to get stats: %v", err)
+		logger.Printf("failed to get stats: %v", err)
 		return
 	}
 

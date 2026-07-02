@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +21,7 @@ import (
 	"loft-bots/internal/bot/admin"
 	"loft-bots/internal/bot/client"
 	"loft-bots/internal/db"
+	"loft-bots/internal/metrics"
 	"loft-bots/internal/notify"
 	"loft-bots/internal/repository"
 	"loft-bots/internal/state"
@@ -72,12 +73,35 @@ type clientSpamState struct {
 	LastWarning  time.Time
 }
 
-func newTelegramBot(token, webhookSecret string) (*bot.Bot, error) {
-	options := []bot.Option{bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout})}
+func newTelegramBot(token, webhookSecret, botName string) (*bot.Bot, error) {
+	options := []bot.Option{
+		bot.WithHTTPClient(telegramPollTimeout, &http.Client{Timeout: telegramHTTPTimeout}),
+		bot.WithMiddlewares(observabilityMiddleware(botName)),
+	}
 	if strings.TrimSpace(webhookSecret) != "" {
 		options = append(options, bot.WithWebhookSecretToken(strings.TrimSpace(webhookSecret)))
 	}
 	return bot.New(token, options...)
+}
+
+// observabilityMiddleware logs every processed Telegram update and records
+// it (plus any panic) in Prometheus metrics, tagged by bot name.
+func observabilityMiddleware(botName string) bot.Middleware {
+	return func(next bot.HandlerFunc) bot.HandlerFunc {
+		return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+			start := time.Now()
+			defer func() {
+				if r := recover(); r != nil {
+					metrics.BotErrorsTotal.WithLabelValues(botName).Inc()
+					logger.Error("bot handler panic", "bot", botName, "update_id", update.ID, "panic", r)
+					panic(r)
+				}
+			}()
+			metrics.BotUpdatesTotal.WithLabelValues(botName).Inc()
+			next(ctx, b, update)
+			logger.Debug("bot update handled", "bot", botName, "update_id", update.ID, "duration_ms", time.Since(start).Milliseconds())
+		}
+	}
 }
 
 func main() {
@@ -97,7 +121,7 @@ func main() {
 	adminBotToken := os.Getenv("ADMIN_BOT_TOKEN")
 
 	if clientBotToken == "" || adminBotToken == "" {
-		log.Fatal("CLIENT_BOT_TOKEN and ADMIN_BOT_TOKEN must be set")
+		logger.Fatal("CLIENT_BOT_TOKEN and ADMIN_BOT_TOKEN must be set")
 	}
 
 	telegramMode := strings.ToLower(strings.TrimSpace(os.Getenv("TELEGRAM_MODE")))
@@ -105,22 +129,22 @@ func main() {
 		telegramMode = "polling"
 	}
 	if telegramMode != "polling" && telegramMode != "webhook" {
-		log.Fatalf("unsupported TELEGRAM_MODE %q, expected polling or webhook", telegramMode)
+		logger.Fatalf("unsupported TELEGRAM_MODE %q, expected polling or webhook", telegramMode)
 	}
-	log.Printf("Telegram mode: %s", telegramMode)
-	log.Printf("Telegram polling configured: poll_timeout=%s http_timeout=%s", telegramPollTimeout, telegramHTTPTimeout)
+	logger.Printf("Telegram mode: %s", telegramMode)
+	logger.Printf("Telegram polling configured: poll_timeout=%s http_timeout=%s", telegramPollTimeout, telegramHTTPTimeout)
 
 	clientWebhookSecret := os.Getenv("CLIENT_WEBHOOK_SECRET")
 	adminWebhookSecret := os.Getenv("ADMIN_WEBHOOK_SECRET")
 
-	clientB, err := newTelegramBot(clientBotToken, clientWebhookSecret)
+	clientB, err := newTelegramBot(clientBotToken, clientWebhookSecret, "client")
 	if err != nil {
-		log.Fatalf("failed to create client bot: %v", err)
+		logger.Fatalf("failed to create client bot: %v", err)
 	}
 
-	adminB, err := newTelegramBot(adminBotToken, adminWebhookSecret)
+	adminB, err := newTelegramBot(adminBotToken, adminWebhookSecret, "admin")
 	if err != nil {
-		log.Fatalf("failed to create admin bot: %v", err)
+		logger.Fatalf("failed to create admin bot: %v", err)
 	}
 
 	botMode := strings.ToLower(strings.TrimSpace(os.Getenv("BOT_MODE")))
@@ -128,7 +152,7 @@ func main() {
 		botMode = "all"
 	}
 	if botMode != "client" && botMode != "admin" && botMode != "all" {
-		log.Fatalf("unsupported BOT_MODE %q, expected client, admin or all", botMode)
+		logger.Fatalf("unsupported BOT_MODE %q, expected client, admin or all", botMode)
 	}
 
 	if botMode == "client" || botMode == "all" {
@@ -141,14 +165,14 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	log.Printf("Starting in %s mode...", botMode)
+	logger.Printf("Starting in %s mode...", botMode)
 	if telegramMode == "webhook" {
 		if botMode != "all" {
-			log.Fatal("TELEGRAM_MODE=webhook requires BOT_MODE=all so both bot webhooks are served by one HTTP server")
+			logger.Fatal("TELEGRAM_MODE=webhook requires BOT_MODE=all so both bot webhooks are served by one HTTP server")
 		}
 		webAppURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_URL")), "/")
 		if webAppURL == "" {
-			log.Fatal("WEBAPP_URL must be set for TELEGRAM_MODE=webhook")
+			logger.Fatal("WEBAPP_URL must be set for TELEGRAM_MODE=webhook")
 		}
 		webPort := os.Getenv("WEBAPP_PORT")
 		if webPort == "" {
@@ -171,7 +195,7 @@ func main() {
 		go adminB.StartWebhook(ctx)
 		go func() {
 			if err := ws.Start(); err != nil {
-				log.Printf("web server error: %v", err)
+				logger.Printf("web server error: %v", err)
 			}
 		}()
 	} else {
@@ -194,14 +218,14 @@ func main() {
 			ws := app.newWebServer(webPort, adminBotToken, clientB)
 			go func() {
 				if err := ws.Start(); err != nil {
-					log.Printf("web server error: %v", err)
+					logger.Printf("web server error: %v", err)
 				}
 			}()
 		}
 	}
 
 	<-ctx.Done()
-	log.Println("Shutting down...")
+	logger.Println("Shutting down...")
 }
 
 func (app *App) newWebServer(webPort, adminBotToken string, clientB *bot.Bot) *web.Server {
@@ -222,14 +246,14 @@ func setupWebhook(ctx context.Context, b *bot.Bot, name, webhookURL, secret stri
 		params.SecretToken = strings.TrimSpace(secret)
 	}
 	if _, err := b.SetWebhook(ctx, params); err != nil {
-		log.Fatalf("failed to set %s webhook: %v", name, err)
+		logger.Fatalf("failed to set %s webhook: %v", name, err)
 	}
-	log.Printf("%s webhook set: %s", name, webhookURL)
+	logger.Printf("%s webhook set: %s", name, webhookURL)
 }
 
 func deleteWebhook(ctx context.Context, b *bot.Bot, name string) {
 	if _, err := b.DeleteWebhook(ctx, &bot.DeleteWebhookParams{}); err != nil {
-		log.Printf("failed to delete %s webhook before polling: %v", name, err)
+		logger.Printf("failed to delete %s webhook before polling: %v", name, err)
 	}
 }
 
@@ -266,7 +290,7 @@ func (app *App) handleClientMessage(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 	deleteRepliedBotMessage(ctx, b, update.Message)
-	log.Printf("client message: telegram_id=%d text=%q photos=%d document=%t", update.Message.From.ID, update.Message.Text, len(update.Message.Photo), update.Message.Document != nil)
+	logger.Printf("client message: telegram_id=%d text=%q photos=%d document=%t", update.Message.From.ID, update.Message.Text, len(update.Message.Photo), update.Message.Document != nil)
 	if update.Message.Text == "/start" {
 		if app.isClientSpamBlocked(ctx, b, update.Message.Chat.ID, update.Message.From.ID) {
 			return
@@ -291,7 +315,7 @@ func deleteRepliedBotMessage(ctx context.Context, b *bot.Bot, message *models.Me
 		return
 	}
 	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: message.Chat.ID, MessageID: message.ReplyToMessage.ID}); err != nil {
-		log.Printf("failed to delete replied bot message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ReplyToMessage.ID, err)
+		logger.Printf("failed to delete replied bot message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ReplyToMessage.ID, err)
 	}
 }
 
@@ -326,16 +350,16 @@ func (app *App) handleClientText(ctx context.Context, b *bot.Bot, update *models
 		app.handleReviewText(ctx, b, update, data)
 		return
 	}
-	log.Printf("ticket input state: telegram_id=%d state=%q err=%v data=%v", telegramID, currentState, err, data)
+	logger.Printf("ticket input state: telegram_id=%d state=%q err=%v data=%v", telegramID, currentState, err, data)
 
 	if err == nil && currentState == "payment:phone" {
 		phone := strings.TrimSpace(update.Message.Text)
 		data["custom_payment_phone"] = phone
 		if err := app.fsm.SetState(telegramID, "client", "payment:receipt", data); err != nil {
-			log.Printf("failed to set payment receipt state: %v", err)
+			logger.Printf("failed to set payment receipt state: %v", err)
 		}
 		if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: update.Message.Chat.ID, MessageID: update.Message.ID}); err != nil {
-			log.Printf("failed to delete user phone message: %v", err)
+			logger.Printf("failed to delete user phone message: %v", err)
 		}
 		app.clientPaymentHandler.ShowPayment(ctx, b, update.Message.Chat.ID, telegramID)
 		return
@@ -346,7 +370,7 @@ func (app *App) handleClientText(ctx context.Context, b *bot.Bot, update *models
 	}
 	eventID, _ := data["event_id"].(float64)
 	event, eventErr := app.eventRepo.GetByID(uint(eventID))
-	log.Printf("ticket input event: telegram_id=%d event_id=%d event_err=%v", telegramID, uint(eventID), eventErr)
+	logger.Printf("ticket input event: telegram_id=%d event_id=%d event_err=%v", telegramID, uint(eventID), eventErr)
 
 	match := numRx.FindString(update.Message.Text)
 	if match == "" {
@@ -358,7 +382,7 @@ func (app *App) handleClientText(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 	quantity, err := strconv.Atoi(match)
-	log.Printf("ticket input parsed: telegram_id=%d raw=%q match=%q quantity=%d err=%v", telegramID, update.Message.Text, match, quantity, err)
+	logger.Printf("ticket input parsed: telegram_id=%d raw=%q match=%q quantity=%d err=%v", telegramID, update.Message.Text, match, quantity, err)
 	if err != nil || eventErr != nil || event == nil || quantity < 1 || quantity > event.PlacesLeft {
 		max := 0
 		if event != nil {
@@ -368,11 +392,11 @@ func (app *App) handleClientText(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 	if err := app.fsm.UpdateData(telegramID, "client", map[string]interface{}{"ticket_quantity": quantity}); err != nil {
-		log.Printf("ticket input state update failed: telegram_id=%d err=%v", telegramID, err)
+		logger.Printf("ticket input state update failed: telegram_id=%d err=%v", telegramID, err)
 		client.SendErrorMessage(ctx, b, update.Message.Chat.ID)
 		return
 	}
-	log.Printf("ticket input accepted: telegram_id=%d quantity=%d", telegramID, quantity)
+	logger.Printf("ticket input accepted: telegram_id=%d quantity=%d", telegramID, quantity)
 	if messageID, ok := data["ui_message_id"].(float64); ok && messageID > 0 {
 		_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: update.Message.Chat.ID, MessageID: int(messageID)})
 	}
@@ -385,7 +409,7 @@ func (app *App) handleReviewText(ctx context.Context, b *bot.Bot, update *models
 	telegramID := update.Message.From.ID
 	user, err := app.userRepo.FindOrCreate(telegramID, update.Message.From.Username)
 	if err != nil {
-		log.Printf("failed to find review user: %v", err)
+		logger.Printf("failed to find review user: %v", err)
 		client.SendErrorMessage(ctx, b, update.Message.Chat.ID)
 		return
 	}
@@ -402,7 +426,7 @@ func (app *App) handleReviewText(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 	if err := app.reviewRepo.Create(&db.Review{UserID: user.ID, OrderID: orderID, Rating: int(rating), Text: strings.TrimSpace(update.Message.Text)}); err != nil {
-		log.Printf("failed to save review: %v", err)
+		logger.Printf("failed to save review: %v", err)
 		client.SendErrorMessage(ctx, b, update.Message.Chat.ID)
 		return
 	}
@@ -456,7 +480,7 @@ func (app *App) handleClientStart(ctx context.Context, b *bot.Bot, update *model
 	username := update.Message.From.Username
 
 	if _, err := app.userRepo.FindOrCreate(telegramID, username); err != nil {
-		log.Printf("failed to create/find client user: telegram_id=%d err=%v", telegramID, err)
+		logger.Printf("failed to create/find client user: telegram_id=%d err=%v", telegramID, err)
 	}
 	app.showClientMainMenu(ctx, b, chatID)
 }
@@ -514,12 +538,12 @@ func (app *App) showClientMainMenu(ctx context.Context, b *bot.Bot, chatID int64
 		}); err == nil {
 			return
 		} else {
-			log.Printf("failed to send start avatar: %v", err)
+			logger.Printf("failed to send start avatar: %v", err)
 		}
 	}
 
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ReplyMarkup: replyMarkup}); err != nil {
-		log.Printf("failed to send client main menu: chat_id=%d err=%v", chatID, err)
+		logger.Printf("failed to send client main menu: chat_id=%d err=%v", chatID, err)
 	}
 }
 
@@ -613,7 +637,7 @@ func (app *App) startReviewScheduler(ctx context.Context, b *bot.Bot) {
 func (app *App) sendDueReviewRequests(ctx context.Context, b *bot.Bot) {
 	orders, err := app.orderRepo.GetDueReviewRequests(time.Now())
 	if err != nil {
-		log.Printf("failed to get due review requests: %v", err)
+		logger.Printf("failed to get due review requests: %v", err)
 		return
 	}
 
@@ -637,10 +661,10 @@ func (app *App) sendDueReviewRequests(ctx context.Context, b *bot.Bot) {
 			ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
 		})
 		if sendErr != nil {
-			log.Printf("failed to send review request: order_id=%d telegram_id=%d err=%v", order.ID, order.User.TelegramID, sendErr)
+			logger.Printf("failed to send review request: order_id=%d telegram_id=%d err=%v", order.ID, order.User.TelegramID, sendErr)
 		}
 		if err := app.orderRepo.MarkReviewRequested(order.ID, time.Now()); err != nil {
-			log.Printf("failed to mark review request sent: order_id=%d err=%v", order.ID, err)
+			logger.Printf("failed to mark review request sent: order_id=%d err=%v", order.ID, err)
 		}
 	}
 }
@@ -663,13 +687,13 @@ func (app *App) startReservationBalanceScheduler(ctx context.Context, b *bot.Bot
 func (app *App) sendDueReservationBalanceMessages(ctx context.Context, b *bot.Bot) {
 	reservations, err := app.reservationRepo.GetDueBalanceReminders(time.Now())
 	if err != nil {
-		log.Printf("failed to get due balance reminders: %v", err)
+		logger.Printf("failed to get due balance reminders: %v", err)
 		return
 	}
 	for _, reservation := range reservations {
 		paid, err := app.orderRepo.PrepaidByReservationID(reservation.ID)
 		if err != nil {
-			log.Printf("failed to get prepaid amount: reservation_id=%d err=%v", reservation.ID, err)
+			logger.Printf("failed to get prepaid amount: reservation_id=%d err=%v", reservation.ID, err)
 			continue
 		}
 		remaining := reservation.TotalPrice - paid
@@ -682,12 +706,12 @@ func (app *App) sendDueReservationBalanceMessages(ctx context.Context, b *bot.Bo
 			message = strings.ReplaceAll(message, "{time_from}", reservation.TimeFrom)
 			message = strings.ReplaceAll(message, "{time_to}", reservation.TimeTo)
 			if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: reservation.User.TelegramID, Text: message}); err != nil {
-				log.Printf("failed to send balance reminder: reservation_id=%d err=%v", reservation.ID, err)
+				logger.Printf("failed to send balance reminder: reservation_id=%d err=%v", reservation.ID, err)
 				continue
 			}
 		}
 		if err := app.reservationRepo.MarkBalanceReminderSent(reservation.ID, time.Now()); err != nil {
-			log.Printf("failed to mark balance reminder sent: reservation_id=%d err=%v", reservation.ID, err)
+			logger.Printf("failed to mark balance reminder sent: reservation_id=%d err=%v", reservation.ID, err)
 		}
 	}
 }
@@ -711,7 +735,7 @@ func (app *App) startReservationStartReminderScheduler(ctx context.Context, b *b
 func (app *App) sendDueReservationStartReminders(ctx context.Context, b *bot.Bot, minutesBefore int) {
 	reservations, err := app.reservationRepo.GetDueStartReminders(time.Now(), minutesBefore)
 	if err != nil {
-		log.Printf("failed to get reservation reminders: minutes=%d err=%v", minutesBefore, err)
+		logger.Printf("failed to get reservation reminders: minutes=%d err=%v", minutesBefore, err)
 		return
 	}
 	for _, reservation := range reservations {
@@ -720,11 +744,11 @@ func (app *App) sendDueReservationStartReminders(ctx context.Context, b *bot.Bot
 		message = strings.ReplaceAll(message, "{time_from}", reservation.TimeFrom)
 		message = strings.ReplaceAll(message, "{time_to}", reservation.TimeTo)
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: reservation.User.TelegramID, Text: message}); err != nil {
-			log.Printf("failed to send reservation reminder: reservation_id=%d err=%v", reservation.ID, err)
+			logger.Printf("failed to send reservation reminder: reservation_id=%d err=%v", reservation.ID, err)
 			continue
 		}
 		if err := app.reservationRepo.MarkStartReminderSent(reservation.ID, minutesBefore, time.Now()); err != nil {
-			log.Printf("failed to mark reservation reminder sent: reservation_id=%d err=%v", reservation.ID, err)
+			logger.Printf("failed to mark reservation reminder sent: reservation_id=%d err=%v", reservation.ID, err)
 		}
 	}
 }
@@ -732,7 +756,7 @@ func (app *App) sendDueReservationStartReminders(ctx context.Context, b *bot.Bot
 func (app *App) sendDueReservationEndReminders(ctx context.Context, b *bot.Bot, minutesBefore int) {
 	reservations, err := app.reservationRepo.GetDueEndReminders(time.Now(), minutesBefore)
 	if err != nil {
-		log.Printf("failed to get reservation end reminders: minutes=%d err=%v", minutesBefore, err)
+		logger.Printf("failed to get reservation end reminders: minutes=%d err=%v", minutesBefore, err)
 		return
 	}
 	for _, reservation := range reservations {
@@ -741,11 +765,11 @@ func (app *App) sendDueReservationEndReminders(ctx context.Context, b *bot.Bot, 
 		message = strings.ReplaceAll(message, "{time_from}", reservation.TimeFrom)
 		message = strings.ReplaceAll(message, "{time_to}", reservation.TimeTo)
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: reservation.User.TelegramID, Text: message}); err != nil {
-			log.Printf("failed to send reservation end reminder: reservation_id=%d err=%v", reservation.ID, err)
+			logger.Printf("failed to send reservation end reminder: reservation_id=%d err=%v", reservation.ID, err)
 			continue
 		}
 		if err := app.reservationRepo.MarkEndReminderSent(reservation.ID, time.Now()); err != nil {
-			log.Printf("failed to mark reservation end reminder sent: reservation_id=%d err=%v", reservation.ID, err)
+			logger.Printf("failed to mark reservation end reminder sent: reservation_id=%d err=%v", reservation.ID, err)
 		}
 	}
 }
@@ -915,11 +939,11 @@ func (app *App) canUseMenu(ctx context.Context, b *bot.Bot, chatID int64, telegr
 
 	hasTicket, err := app.orderRepo.HasActiveEventTicket(user.ID)
 	if err != nil {
-		log.Printf("failed to check event ticket: %v", err)
+		logger.Printf("failed to check event ticket: %v", err)
 	}
 	hasReservation, err := app.reservationRepo.HasUpcomingReservation(user.ID)
 	if err != nil {
-		log.Printf("failed to check reservation: %v", err)
+		logger.Printf("failed to check reservation: %v", err)
 	}
 	if hasTicket || hasReservation {
 		return true
@@ -973,7 +997,7 @@ func (app *App) canUseMenuType(ctx context.Context, b *bot.Bot, chatID int64, te
 
 func (app *App) showTicketQuantityPicker(ctx context.Context, b *bot.Bot, chatID, telegramID int64, eventID uint) {
 	event, err := app.eventRepo.GetByID(eventID)
-	log.Printf("ticket prompt: telegram_id=%d event_id=%d err=%v", telegramID, eventID, err)
+	logger.Printf("ticket prompt: telegram_id=%d event_id=%d err=%v", telegramID, eventID, err)
 	if err != nil || !event.IsActive || event.PlacesLeft < 1 {
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "К сожалению, билеты закончились."})
 		return
@@ -998,7 +1022,7 @@ func (app *App) showTicketQuantityPicker(ctx context.Context, b *bot.Bot, chatID
 	delete(existingData, "ticket_quantity")
 	delete(existingData, "custom_payment_phone")
 	if err := app.fsm.SetState(telegramID, "client", "ticket:quantity", existingData); err != nil {
-		log.Printf("ticket prompt state setup failed: telegram_id=%d err=%v", telegramID, err)
+		logger.Printf("ticket prompt state setup failed: telegram_id=%d err=%v", telegramID, err)
 		client.SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -1023,7 +1047,7 @@ func deleteClientCallbackMessage(ctx context.Context, b *bot.Bot, update *models
 	}
 	message := update.CallbackQuery.Message.Message
 	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: message.Chat.ID, MessageID: message.ID}); err != nil {
-		log.Printf("failed to replace client message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ID, err)
+		logger.Printf("failed to replace client message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ID, err)
 	}
 }
 
@@ -1033,7 +1057,7 @@ func (app *App) handleAdminStart(ctx context.Context, b *bot.Bot, update *models
 	username := update.Message.From.Username
 
 	if !app.isAuthorized(telegramID, username) {
-		log.Printf("unauthorized access attempt: id=%d username=@%s", telegramID, username)
+		logger.Printf("unauthorized access attempt: id=%d username=@%s", telegramID, username)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "\u26D4 У вас нет доступа к этому боту.",
@@ -1315,7 +1339,7 @@ func (app *App) handleAdminCallback(ctx context.Context, b *bot.Bot, update *mod
 func (app *App) showAdminContacts(ctx context.Context, b *bot.Bot, chatID int64) {
 	users, err := app.userRepo.GetAll()
 	if err != nil {
-		log.Printf("failed to get contacts: %v", err)
+		logger.Printf("failed to get contacts: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "❌ Не удалось загрузить контакты."})
 		return
 	}

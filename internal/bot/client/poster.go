@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"strings"
 	"time"
 
@@ -25,7 +25,7 @@ func NewPosterHandler(eventRepo *repository.EventRepo) *PosterHandler {
 func (h *PosterHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) {
 	events, err := h.eventRepo.GetActive()
 	if err != nil {
-		log.Printf("failed to get events: %v", err)
+		logger.Printf("failed to get events: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -44,7 +44,7 @@ func (h *PosterHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) 
 func (h *PosterHandler) ShowAt(ctx context.Context, b *bot.Bot, chatID int64, index int) {
 	events, err := h.eventRepo.GetActive()
 	if err != nil {
-		log.Printf("failed to get events: %v", err)
+		logger.Printf("failed to get events: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -76,8 +76,8 @@ func (h *PosterHandler) showEvent(ctx context.Context, b *bot.Bot, chatID int64,
 	keyboard := h.buildPosterKeyboard(ev.ID, ev.PlacesLeft, index, len(events))
 
 	params := &bot.SendMessageParams{
-		ChatID:    chatID,
-		Text:      text,
+		ChatID: chatID,
+		Text:   text,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
@@ -90,14 +90,14 @@ func (h *PosterHandler) showEvent(ctx context.Context, b *bot.Bot, chatID int64,
 			Caption:     text,
 			ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
 		}); err != nil {
-			log.Printf("failed to send event photo: event_id=%d err=%v", ev.ID, err)
+			logger.Printf("failed to send event photo: event_id=%d err=%v", ev.ID, err)
 			if _, err := b.SendMessage(ctx, params); err != nil {
-				log.Printf("failed to send event fallback message: event_id=%d err=%v", ev.ID, err)
+				logger.Printf("failed to send event fallback message: event_id=%d err=%v", ev.ID, err)
 			}
 		}
 	} else {
 		if _, err := b.SendMessage(ctx, params); err != nil {
-			log.Printf("failed to send event message: event_id=%d err=%v", ev.ID, err)
+			logger.Printf("failed to send event message: event_id=%d err=%v", ev.ID, err)
 		}
 	}
 }

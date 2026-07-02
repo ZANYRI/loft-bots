@@ -3,7 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"strconv"
 	"strings"
 
@@ -140,7 +140,7 @@ func (h *MenuHandler) HandlePrice(ctx context.Context, b *bot.Bot, chatID int64,
 func (h *MenuHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "admin")
 	if err != nil {
-		log.Printf("no menu data: %v", err)
+		logger.Printf("no menu data: %v", err)
 		return
 	}
 
@@ -156,7 +156,7 @@ func (h *MenuHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, telegr
 	}
 
 	if err := h.menuItemRepo.Create(item); err != nil {
-		log.Printf("failed to create menu item: %v", err)
+		logger.Printf("failed to create menu item: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "\u274C Ошибка при сохранении.",
@@ -174,7 +174,7 @@ func (h *MenuHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, telegr
 func (h *MenuHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) {
 	items, err := h.menuItemRepo.GetAll()
 	if err != nil {
-		log.Printf("failed to get menu items: %v", err)
+		logger.Printf("failed to get menu items: %v", err)
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *MenuHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) {
 func (h *MenuHandler) ShowCategories(ctx context.Context, b *bot.Bot, chatID int64) {
 	categories, err := h.menuCatRepo.GetAll()
 	if err != nil {
-		log.Printf("failed to get categories: %v", err)
+		logger.Printf("failed to get categories: %v", err)
 		return
 	}
 
@@ -278,7 +278,7 @@ func (h *MenuHandler) HandleAddCategory(ctx context.Context, b *bot.Bot, chatID 
 	}
 
 	if err := h.menuCatRepo.Create(cat); err != nil {
-		log.Printf("failed to create category: %v", err)
+		logger.Printf("failed to create category: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "\u274C Ошибка при создании категории.",
@@ -296,7 +296,7 @@ func (h *MenuHandler) HandleAddCategory(ctx context.Context, b *bot.Bot, chatID 
 func (h *MenuHandler) Edit(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, itemID uint) {
 	item, err := h.menuItemRepo.GetByID(itemID)
 	if err != nil {
-		log.Printf("failed to get menu item: %v", err)
+		logger.Printf("failed to get menu item: %v", err)
 		return
 	}
 

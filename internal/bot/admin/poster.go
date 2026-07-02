@@ -3,7 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"strconv"
 	"strings"
 	"time"
@@ -53,8 +53,8 @@ func (h *PosterHandler) ShowMenu(ctx context.Context, b *bot.Bot, chatID int64) 
 func (h *PosterHandler) StartAdd(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	h.fsm.SetState(telegramID, "admin", "admin:poster:title", nil)
 	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    chatID,
-		Text:      "Введите название мероприятия:",
+		ChatID: chatID,
+		Text:   "Введите название мероприятия:",
 	})
 }
 
@@ -233,7 +233,7 @@ func (h *PosterHandler) showConfirm(ctx context.Context, b *bot.Bot, chatID int6
 func (h *PosterHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "admin")
 	if err != nil {
-		log.Printf("no poster data: %v", err)
+		logger.Printf("no poster data: %v", err)
 		return
 	}
 
@@ -269,7 +269,7 @@ func (h *PosterHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, tele
 	}
 
 	if err := h.eventRepo.Create(event); err != nil {
-		log.Printf("failed to create event: %v", err)
+		logger.Printf("failed to create event: %v", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "\u274C Ошибка при сохранении мероприятия.",
@@ -288,7 +288,7 @@ func (h *PosterHandler) Save(ctx context.Context, b *bot.Bot, chatID int64, tele
 func (h *PosterHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) {
 	events, err := h.eventRepo.GetAll()
 	if err != nil {
-		log.Printf("failed to get events: %v", err)
+		logger.Printf("failed to get events: %v", err)
 		return
 	}
 
@@ -333,7 +333,7 @@ func (h *PosterHandler) ShowList(ctx context.Context, b *bot.Bot, chatID int64) 
 func (h *PosterHandler) Edit(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, eventID uint) {
 	event, err := h.eventRepo.GetByID(eventID)
 	if err != nil {
-		log.Printf("failed to get event: %v", err)
+		logger.Printf("failed to get event: %v", err)
 		return
 	}
 

@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
+	"loft-bots/internal/logger"
 	"math"
 	"strconv"
 	"strings"
@@ -342,7 +342,7 @@ func (h *ReservationHandler) HandleTimeTo(ctx context.Context, b *bot.Bot, chatI
 
 	rentalPrice, err := h.rentalPriceRepo.GetByDayType(dayType)
 	if err != nil {
-		log.Printf("failed to get rental price: %v", err)
+		logger.Printf("failed to get rental price: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return
 	}
@@ -391,14 +391,14 @@ func (h *ReservationHandler) HandleTimeTo(ctx context.Context, b *bot.Bot, chatI
 func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) bool {
 	_, data, err := h.fsm.GetState(telegramID, "client")
 	if err != nil {
-		log.Printf("no reservation data found: %v", err)
+		logger.Printf("no reservation data found: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return false
 	}
 
 	user, err := h.userRepo.FindOrCreate(telegramID, "")
 	if err != nil {
-		log.Printf("failed to find user: %v", err)
+		logger.Printf("failed to find user: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return false
 	}
@@ -415,7 +415,7 @@ func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int
 	timeTo, _ := data["time_to"].(string)
 	bookings, err := h.reservationRepo.GetBookedSlotsAround(date)
 	if err != nil {
-		log.Printf("failed to get booked slots: %v", err)
+		logger.Printf("failed to get booked slots: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return false
 	}
@@ -440,7 +440,7 @@ func (h *ReservationHandler) Confirm(ctx context.Context, b *bot.Bot, chatID int
 	}
 
 	if err := h.reservationRepo.Create(reservation); err != nil {
-		log.Printf("failed to create reservation: %v", err)
+		logger.Printf("failed to create reservation: %v", err)
 		SendErrorMessage(ctx, b, chatID)
 		return false
 	}

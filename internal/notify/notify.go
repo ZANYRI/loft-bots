@@ -2,13 +2,24 @@ package notify
 
 import (
 	"context"
-	"log"
+	"loft-bots/internal/logger"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+)
+
+type AdminMessage struct {
+	ChatID    int64
+	MessageID int
+}
+
+var (
+	adminMessagesMu sync.Mutex
+	adminMessages   = map[uint][]AdminMessage{}
 )
 
 func GetAdminIDs() []int64 {
@@ -21,7 +32,7 @@ func GetAdminIDs() []int64 {
 	for _, p := range parts {
 		id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64)
 		if err != nil {
-			log.Printf("invalid admin telegram ID: %s", p)
+			logger.Printf("invalid admin telegram ID: %s", p)
 			continue
 		}
 		ids = append(ids, id)
@@ -42,8 +53,9 @@ func GetAdminUsernames() []string {
 	return usernames
 }
 
-func SendToAdmins(ctx context.Context, b *bot.Bot, text string, kb *models.InlineKeyboardMarkup) {
+func SendToAdmins(ctx context.Context, b *bot.Bot, text string, kb *models.InlineKeyboardMarkup) []AdminMessage {
 	adminIDs := GetAdminIDs()
+	var sent []AdminMessage
 	for _, id := range adminIDs {
 		params := &bot.SendMessageParams{
 			ChatID:    id,
@@ -53,29 +65,36 @@ func SendToAdmins(ctx context.Context, b *bot.Bot, text string, kb *models.Inlin
 		if kb != nil {
 			params.ReplyMarkup = kb
 		}
-		_, err := b.SendMessage(ctx, params)
+		msg, err := b.SendMessage(ctx, params)
 		if err != nil {
-			log.Printf("failed to send notification to admin %d: %v", id, err)
+			logger.Printf("failed to send notification to admin %d: %v", id, err)
+			continue
 		}
+		sent = append(sent, AdminMessage{ChatID: id, MessageID: msg.ID})
 	}
+	return sent
 }
 
-func SendPhotoToAdmins(ctx context.Context, b *bot.Bot, fileID, caption string) {
-	for _, id := range GetAdminIDs() {
-		if _, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
-			ChatID:  id,
-			Photo:   &models.InputFileString{Data: fileID},
-			Caption: caption,
-		}); err != nil {
-			log.Printf("failed to send receipt to admin %d: %v", id, err)
-		}
-	}
+// RegisterOrderMessages remembers which admin chat/message pairs carry the
+// notification for orderID, so it can be wiped from every admin chat once
+// one admin acts on it.
+func RegisterOrderMessages(orderID uint, messages []AdminMessage) {
+	adminMessagesMu.Lock()
+	defer adminMessagesMu.Unlock()
+	adminMessages[orderID] = messages
 }
 
-func SendDocumentToAdmins(ctx context.Context, b *bot.Bot, fileID, caption string) {
-	for _, id := range GetAdminIDs() {
-		if _, err := b.SendDocument(ctx, &bot.SendDocumentParams{ChatID: id, Document: &models.InputFileString{Data: fileID}, Caption: caption}); err != nil {
-			log.Printf("failed to send receipt document to admin %d: %v", id, err)
+// DeleteOrderMessages removes the order notification from every admin chat
+// it was sent to.
+func DeleteOrderMessages(ctx context.Context, b *bot.Bot, orderID uint) {
+	adminMessagesMu.Lock()
+	messages := adminMessages[orderID]
+	delete(adminMessages, orderID)
+	adminMessagesMu.Unlock()
+
+	for _, m := range messages {
+		if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: m.ChatID, MessageID: m.MessageID}); err != nil {
+			logger.Printf("failed to delete admin notification: chat=%d msg=%d err=%v", m.ChatID, m.MessageID, err)
 		}
 	}
 }
@@ -87,6 +106,6 @@ func SendToUser(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 		ParseMode: models.ParseModeHTML,
 	})
 	if err != nil {
-		log.Printf("failed to send message to user %d: %v", chatID, err)
+		logger.Printf("failed to send message to user %d: %v", chatID, err)
 	}
 }

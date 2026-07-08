@@ -10,6 +10,7 @@ import (
 	"loft-bots/internal/logger"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -472,7 +473,31 @@ func saveTelegramReceipt(fileID string) (string, error) {
 	if _, err := io.Copy(destination, fileResponse.Body); err != nil {
 		return "", err
 	}
-	return strings.TrimRight(os.Getenv("WEBAPP_URL"), "/") + "/uploads/" + name, nil
+	destination.Close()
+
+	servedName := name
+	if strings.EqualFold(filepath.Ext(name), ".pdf") {
+		if pngName, err := convertPDFToPNG(name); err == nil {
+			servedName = pngName
+		} else {
+			logger.Printf("failed to convert receipt pdf to image: %v", err)
+		}
+	}
+
+	return strings.TrimRight(os.Getenv("WEBAPP_URL"), "/") + "/uploads/" + servedName, nil
+}
+
+// convertPDFToPNG renders the first page of an uploaded PDF receipt to a PNG
+// (via poppler's pdftoppm) so admins see the receipt as an image instead of
+// having to open a PDF link.
+func convertPDFToPNG(pdfName string) (string, error) {
+	pdfPath := filepath.Join("uploads", pdfName)
+	outBase := strings.TrimSuffix(pdfPath, filepath.Ext(pdfPath))
+	cmd := exec.Command("pdftoppm", "-png", "-r", "150", "-singlefile", pdfPath, outBase)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("pdftoppm failed: %w (%s)", err, string(output))
+	}
+	return strings.TrimSuffix(pdfName, filepath.Ext(pdfName)) + ".png", nil
 }
 
 func (h *PaymentHandler) buildOrderText(order *db.Order, data map[string]interface{}, username string) string {

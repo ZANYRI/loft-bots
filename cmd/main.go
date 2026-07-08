@@ -272,7 +272,7 @@ func (app *App) initRepositories(gormDB *gorm.DB) {
 }
 
 func (app *App) initClientHandlers(b *bot.Bot, adminB *bot.Bot, gormDB *gorm.DB) {
-	app.clientMenuHandler = client.NewMenuHandler(app.menuItemRepo, app.menuCatRepo, app.settingsRepo, app.fsm, app.userRepo)
+	app.clientMenuHandler = client.NewMenuHandler(app.menuItemRepo, app.menuCatRepo, app.settingsRepo, app.fsm, app.userRepo, app.eventRepo, app.reservationRepo)
 	app.clientPosterHandler = client.NewPosterHandler(app.eventRepo)
 	app.clientReservationHandler = client.NewReservationHandler(app.reservationRepo, app.rentalPriceRepo, app.userRepo, app.fsm)
 	app.clientPaymentHandler = client.NewPaymentHandler(app.orderRepo, app.menuItemRepo, app.settingsRepo, app.userRepo, app.eventRepo, app.reservationRepo, app.fsm, adminB)
@@ -874,6 +874,12 @@ func (app *App) handleClientCallback(ctx context.Context, b *bot.Bot, update *mo
 	case data == "menu_cart":
 		app.clientMenuHandler.ShowCart(ctx, b, chatID, telegramID)
 
+	case data == "cart_remove_ticket":
+		app.clientMenuHandler.RemoveTicketFromCart(ctx, b, chatID, telegramID)
+
+	case data == "cart_remove_reservation":
+		app.clientMenuHandler.RemoveReservationFromCart(ctx, b, chatID, telegramID)
+
 	case data == "menu_checkout":
 		if !app.canUseMenu(ctx, b, chatID, telegramID) {
 			return
@@ -1036,6 +1042,7 @@ func shouldReplaceClientMessage(data string) bool {
 	return data == "main_menu" || data == "poster_show" || strings.HasPrefix(data, "poster_") ||
 		strings.HasPrefix(data, "buy_ticket_") || data == "menu_categories" || data == "service_categories" ||
 		strings.HasPrefix(data, "menu_cat_") || strings.HasPrefix(data, "menu_remove_") || data == "menu_cart" ||
+		data == "cart_remove_ticket" || data == "cart_remove_reservation" ||
 		data == "menu_checkout" || data == "reservation_start" || strings.HasPrefix(data, "res_") ||
 		data == "reservation_confirm" || data == "go_to_payment" || data == "profile_show" || data == "wifi_info" ||
 		data == "payment_custom_phone"

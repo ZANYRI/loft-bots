@@ -16,11 +16,13 @@ import (
 )
 
 type MenuHandler struct {
-	menuItemRepo *repository.MenuItemRepo
-	menuCatRepo  *repository.MenuCategoryRepo
-	settingsRepo *repository.SettingsRepo
-	fsm          *state.FSM
-	userRepo     *repository.UserRepo
+	menuItemRepo    *repository.MenuItemRepo
+	menuCatRepo     *repository.MenuCategoryRepo
+	settingsRepo    *repository.SettingsRepo
+	fsm             *state.FSM
+	userRepo        *repository.UserRepo
+	eventRepo       *repository.EventRepo
+	reservationRepo *repository.ReservationRepo
 }
 
 func NewMenuHandler(
@@ -29,13 +31,17 @@ func NewMenuHandler(
 	settingsRepo *repository.SettingsRepo,
 	fsm *state.FSM,
 	userRepo *repository.UserRepo,
+	eventRepo *repository.EventRepo,
+	reservationRepo *repository.ReservationRepo,
 ) *MenuHandler {
 	return &MenuHandler{
-		menuItemRepo: menuItemRepo,
-		menuCatRepo:  menuCatRepo,
-		settingsRepo: settingsRepo,
-		fsm:          fsm,
-		userRepo:     userRepo,
+		menuItemRepo:    menuItemRepo,
+		menuCatRepo:     menuCatRepo,
+		settingsRepo:    settingsRepo,
+		fsm:             fsm,
+		userRepo:        userRepo,
+		eventRepo:       eventRepo,
+		reservationRepo: reservationRepo,
 	}
 }
 
@@ -217,6 +223,28 @@ func (h *MenuHandler) RemoveFromCart(ctx context.Context, b *bot.Bot, chatID int
 	h.ShowCart(ctx, b, chatID, telegramID)
 }
 
+func (h *MenuHandler) RemoveTicketFromCart(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+	if err := h.fsm.DeleteData(telegramID, "client", "event_id", "ticket_quantity", "custom_payment_phone"); err != nil {
+		logger.Printf("failed to remove ticket from cart: %v", err)
+	}
+	h.ShowCart(ctx, b, chatID, telegramID)
+}
+
+func (h *MenuHandler) RemoveReservationFromCart(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
+	_, data, err := h.fsm.GetState(telegramID, "client")
+	if err == nil {
+		if reservationID, ok := data["reservation_id"].(float64); ok && reservationID > 0 {
+			if err := h.reservationRepo.Cancel(uint(reservationID)); err != nil {
+				logger.Printf("failed to cancel reservation: reservation_id=%d err=%v", uint(reservationID), err)
+			}
+		}
+	}
+	if err := h.fsm.DeleteData(telegramID, "client", "reservation_id", "total_price", "reservation_full_price", "date", "time_from", "time_to", "day_type", "hours", "price_per_hour"); err != nil {
+		logger.Printf("failed to remove reservation from cart: %v", err)
+	}
+	h.ShowCart(ctx, b, chatID, telegramID)
+}
+
 func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64) {
 	_, data, err := h.fsm.GetState(telegramID, "client")
 	if err != nil {
@@ -231,9 +259,30 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 	var total float64
 	hasItems := false
 	removeButtons := make([][]models.InlineKeyboardButton, 0)
+
+	if eventID, ok := data["event_id"].(float64); ok && eventID > 0 {
+		if event, err := h.eventRepo.GetByID(uint(eventID)); err == nil {
+			quantity, _ := data["ticket_quantity"].(float64)
+			if quantity < 1 {
+				quantity = 1
+			}
+			subtotal := event.Price * quantity
+			total += subtotal
+			hasItems = true
+			text += fmt.Sprintf("🎟 Билет на «%s» × %d — %.0f ₽\n", event.Title, int(quantity), subtotal)
+			removeButtons = append(removeButtons, []models.InlineKeyboardButton{{Text: "➖ Билет «" + event.Title + "»", CallbackData: "cart_remove_ticket"}})
+		}
+	}
+
 	if reservationID, ok := data["reservation_id"].(float64); ok && reservationID > 0 {
-		text += "🔑 Бронирование лофта добавлено к заказу\n"
+		if reservation, err := h.reservationRepo.GetByID(uint(reservationID)); err == nil {
+			total += reservation.TotalPrice
+			text += fmt.Sprintf("🔑 Бронирование лофта %s, %s – %s — %.0f ₽\n", formatDateRU(reservation.Date), reservation.TimeFrom, reservation.TimeTo, reservation.TotalPrice)
+		} else {
+			text += "🔑 Бронирование лофта добавлено к заказу\n"
+		}
 		hasItems = true
+		removeButtons = append(removeButtons, []models.InlineKeyboardButton{{Text: "➖ Бронирование лофта", CallbackData: "cart_remove_reservation"}})
 	}
 
 	for key, val := range data {
@@ -273,7 +322,7 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 		return
 	}
 
-	text += fmt.Sprintf("\nИтого за доп. услуги: %.0f \u20BD", total)
+	text += fmt.Sprintf("\nИтого: %.0f \u20BD", total)
 
 	keyboard := append(removeButtons, []models.InlineKeyboardButton{
 		{Text: "\u2795 Добавить ещё", CallbackData: "menu_categories"},

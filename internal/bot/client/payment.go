@@ -287,7 +287,7 @@ func (h *PaymentHandler) HandlePaymentDone(ctx context.Context, b *bot.Bot, chat
 	}
 
 	orderText := h.buildOrderText(order, data, user.Username)
-	sentMessages := notify.SendToAdmins(ctx, h.adminBot, orderText, h.buildAdminKeyboard(order.ID))
+	sentMessages := notify.SendToAdminsWithReceipt(ctx, h.adminBot, orderText, order.ReceiptURL, h.buildAdminKeyboard(order.ID))
 	notify.RegisterOrderMessages(order.ID, sentMessages)
 
 	h.fsm.ClearState(telegramID, "client")
@@ -364,12 +364,10 @@ func (h *PaymentHandler) RequestReceipt(ctx context.Context, b *bot.Bot, chatID 
 }
 
 func (h *PaymentHandler) HandleReceipt(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, fileID string, isDocument bool) {
-	if !isDocument {
-		if url, err := saveTelegramReceipt(fileID); err == nil {
-			h.fsm.UpdateData(telegramID, "client", map[string]interface{}{"receipt_url": url})
-		} else {
-			logger.Printf("failed to save receipt: %v", err)
-		}
+	if url, err := saveTelegramReceipt(fileID); err == nil {
+		h.fsm.UpdateData(telegramID, "client", map[string]interface{}{"receipt_url": url})
+	} else {
+		logger.Printf("failed to save receipt: %v", err)
 	}
 	h.HandlePaymentDone(ctx, b, chatID, telegramID)
 }

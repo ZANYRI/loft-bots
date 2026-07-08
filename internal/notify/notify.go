@@ -75,6 +75,49 @@ func SendToAdmins(ctx context.Context, b *bot.Bot, text string, kb *models.Inlin
 	return sent
 }
 
+// SendToAdminsWithReceipt behaves like SendToAdmins, but when receiptURL is set
+// it attaches the payment receipt (photo or PDF) natively so admins see it at
+// a readable size instead of a bare link, with the order text as the caption.
+func SendToAdminsWithReceipt(ctx context.Context, b *bot.Bot, text, receiptURL string, kb *models.InlineKeyboardMarkup) []AdminMessage {
+	if receiptURL == "" {
+		return SendToAdmins(ctx, b, text, kb)
+	}
+	adminIDs := GetAdminIDs()
+	var sent []AdminMessage
+	isPDF := strings.HasSuffix(strings.ToLower(receiptURL), ".pdf")
+	caption := text
+	if runes := []rune(caption); len(runes) > 1024 {
+		caption = string(runes[:1021]) + "..."
+	}
+	for _, id := range adminIDs {
+		var msg *models.Message
+		var err error
+		if isPDF {
+			msg, err = b.SendDocument(ctx, &bot.SendDocumentParams{
+				ChatID:      id,
+				Document:    &models.InputFileString{Data: receiptURL},
+				Caption:     caption,
+				ParseMode:   models.ParseModeHTML,
+				ReplyMarkup: kb,
+			})
+		} else {
+			msg, err = b.SendPhoto(ctx, &bot.SendPhotoParams{
+				ChatID:      id,
+				Photo:       &models.InputFileString{Data: receiptURL},
+				Caption:     caption,
+				ParseMode:   models.ParseModeHTML,
+				ReplyMarkup: kb,
+			})
+		}
+		if err != nil {
+			logger.Printf("failed to send receipt to admin %d: %v", id, err)
+			continue
+		}
+		sent = append(sent, AdminMessage{ChatID: id, MessageID: msg.ID})
+	}
+	return sent
+}
+
 // RegisterOrderMessages remembers which admin chat/message pairs carry the
 // notification for orderID, so it can be wiped from every admin chat once
 // one admin acts on it.

@@ -327,6 +327,8 @@ func (h *MenuHandler) ShowCart(ctx context.Context, b *bot.Bot, chatID int64, te
 	keyboard := append(removeButtons, []models.InlineKeyboardButton{
 		{Text: "\u2795 Добавить ещё", CallbackData: "menu_categories"},
 		{Text: "➡ Перейти к оплате", CallbackData: "menu_checkout"},
+	}, []models.InlineKeyboardButton{
+		{Text: "🏠 Главное меню", CallbackData: "main_menu"},
 	})
 
 	b.SendMessage(ctx, &bot.SendMessageParams{

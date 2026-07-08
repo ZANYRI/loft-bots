@@ -462,7 +462,7 @@ func (h *ReservationHandler) PromptMenuOrPayment(ctx context.Context, b *bot.Bot
 			text = "Хотите добавить дополнительные услуги к бронированию?"
 		}
 	}
-	keyboard := [][]models.InlineKeyboardButton{{button}, {{Text: "➡ Продолжить к оплате", CallbackData: "go_to_payment"}}}
+	keyboard := [][]models.InlineKeyboardButton{{button}, {{Text: "➡ Продолжить к оплате", CallbackData: "go_to_payment"}}, {{Text: "🏠 Главное меню", CallbackData: "main_menu"}}}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,

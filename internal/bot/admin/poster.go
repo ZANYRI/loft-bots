@@ -371,6 +371,9 @@ func (h *PosterHandler) Edit(ctx context.Context, b *bot.Bot, chatID int64, tele
 			{Text: "\U0001F4B0 Изменить цену", CallbackData: fmt.Sprintf("admin_edit_ev_price_%d", eventID)},
 		},
 		{
+			{Text: "👥 Изменить кол-во мест", CallbackData: fmt.Sprintf("admin_edit_ev_places_%d", eventID)},
+		},
+		{
 			{Text: toggleLabel, CallbackData: fmt.Sprintf("admin_edit_ev_toggle_%d", eventID)},
 		},
 		{
@@ -388,6 +391,247 @@ func (h *PosterHandler) Edit(ctx context.Context, b *bot.Bot, chatID int64, tele
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: keyboard,
 		},
+	})
+}
+
+// StartEditField begins a single-field edit flow for an existing event.
+// The field is stored as the FSM state suffix; HandleEditField picks it back
+// up once the admin replies with the new value.
+func (h *PosterHandler) StartEditField(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, eventID uint, field string) {
+	prompts := map[string]string{
+		"title":  "Введите новое название мероприятия:",
+		"desc":   "Введите новое описание мероприятия:",
+		"photo":  "Загрузите новое фото мероприятия:",
+		"dt":     "Введите новую дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ (например 25.12.2026 19:00-23:00):",
+		"price":  "Введите новую цену билета (в рублях):",
+		"places": "Введите новое общее количество мест. Уже проданные билеты сохранятся, свободные места пересчитаются автоматически:",
+	}
+	prompt, ok := prompts[field]
+	if !ok {
+		return
+	}
+	h.fsm.SetState(telegramID, "admin", "admin:editev:"+field, map[string]interface{}{"event_id": float64(eventID)})
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: prompt})
+}
+
+func (h *PosterHandler) editEventID(telegramID int64) (uint, map[string]interface{}) {
+	_, data, err := h.fsm.GetState(telegramID, "admin")
+	if err != nil {
+		return 0, nil
+	}
+	idFloat, ok := data["event_id"].(float64)
+	if !ok {
+		return 0, nil
+	}
+	return uint(idFloat), data
+}
+
+func (h *PosterHandler) finishFieldEdit(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, eventID uint, confirmText string) {
+	h.fsm.ClearState(telegramID, "admin")
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: confirmText})
+	h.Edit(ctx, b, chatID, telegramID, eventID)
+}
+
+func (h *PosterHandler) HandleEditTitle(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, title string) {
+	eventID, _ := h.editEventID(telegramID)
+	if eventID == 0 {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if strings.TrimSpace(title) == "" {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Название не может быть пустым. Введите ещё раз:"})
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "title", title); err != nil {
+		logger.Printf("failed to update event title: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.finishFieldEdit(ctx, b, chatID, telegramID, eventID, "✅ Название обновлено.")
+}
+
+func (h *PosterHandler) HandleEditDescription(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, desc string) {
+	eventID, _ := h.editEventID(telegramID)
+	if eventID == 0 {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "description", desc); err != nil {
+		logger.Printf("failed to update event description: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.finishFieldEdit(ctx, b, chatID, telegramID, eventID, "✅ Описание обновлено.")
+}
+
+func (h *PosterHandler) HandleEditPhoto(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, fileID string) {
+	eventID, _ := h.editEventID(telegramID)
+	if eventID == 0 {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "image_file_id", fileID); err != nil {
+		logger.Printf("failed to update event photo: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.finishFieldEdit(ctx, b, chatID, telegramID, eventID, "✅ Фото обновлено.")
+}
+
+func (h *PosterHandler) HandleEditPrice(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, priceStr string) {
+	eventID, _ := h.editEventID(telegramID)
+	if eventID == 0 {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	price, err := strconv.ParseFloat(strings.TrimSpace(priceStr), 64)
+	if err != nil || price < 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Неверный формат цены. Введите число:"})
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "price", price); err != nil {
+		logger.Printf("failed to update event price: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.finishFieldEdit(ctx, b, chatID, telegramID, eventID, "✅ Цена обновлена.")
+}
+
+func (h *PosterHandler) HandleEditDateTime(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, input string) {
+	eventID, _ := h.editEventID(telegramID)
+	if eventID == 0 {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	dateStr, timeRange, ok := strings.Cut(strings.TrimSpace(input), " ")
+	timeFrom, timeTo, okRange := strings.Cut(timeRange, "-")
+	if !ok || !okRange {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Неверный формат. Используйте ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ:"})
+		return
+	}
+	parsedDate, err := time.Parse("02.01.2006", dateStr)
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Неверный формат даты. Используйте ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ:"})
+		return
+	}
+	if !isValidTime(timeFrom) || !isValidTime(timeTo) {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Неверный формат времени. Используйте ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ:"})
+		return
+	}
+	if dateOnly(parsedDate).Before(dateOnly(time.Now())) {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Нельзя перенести мероприятие задним числом. Введите сегодняшнюю или будущую дату:"})
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "event_date", parsedDate); err != nil {
+		logger.Printf("failed to update event date: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "time_from", timeFrom); err != nil {
+		logger.Printf("failed to update event time_from: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "time_to", timeTo); err != nil {
+		logger.Printf("failed to update event time_to: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.finishFieldEdit(ctx, b, chatID, telegramID, eventID, "✅ Дата и время обновлены.")
+}
+
+// HandleEditPlaces changes the total place count for an event. Places
+// already sold (TotalPlaces - PlacesLeft) are preserved; PlacesLeft is
+// recalculated so it never exceeds the new total and never goes negative.
+func (h *PosterHandler) HandleEditPlaces(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, placesStr string) {
+	eventID, _ := h.editEventID(telegramID)
+	if eventID == 0 {
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	newTotal, err := strconv.Atoi(strings.TrimSpace(placesStr))
+	if err != nil || newTotal < 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Неверный формат. Введите целое число мест:"})
+		return
+	}
+	event, err := h.eventRepo.GetByID(eventID)
+	if err != nil {
+		logger.Printf("failed to get event: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	sold := event.TotalPlaces - event.PlacesLeft
+	if sold < 0 {
+		sold = 0
+	}
+	newPlacesLeft := newTotal - sold
+	if newPlacesLeft < 0 {
+		newPlacesLeft = 0
+	}
+	if err := h.eventRepo.UpdateField(eventID, "total_places", newTotal); err != nil {
+		logger.Printf("failed to update event total places: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "places_left", newPlacesLeft); err != nil {
+		logger.Printf("failed to update event places left: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if newPlacesLeft > 0 && !event.IsActive {
+		_ = h.eventRepo.UpdateField(eventID, "is_active", true)
+	}
+	h.finishFieldEdit(ctx, b, chatID, telegramID, eventID, fmt.Sprintf("✅ Количество мест обновлено: %d всего, %d свободно.", newTotal, newPlacesLeft))
+}
+
+func (h *PosterHandler) ToggleActive(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, eventID uint) {
+	event, err := h.eventRepo.GetByID(eventID)
+	if err != nil {
+		logger.Printf("failed to get event: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	if err := h.eventRepo.UpdateField(eventID, "is_active", !event.IsActive); err != nil {
+		logger.Printf("failed to toggle event: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	h.Edit(ctx, b, chatID, telegramID, eventID)
+}
+
+func (h *PosterHandler) ConfirmDelete(ctx context.Context, b *bot.Bot, chatID int64, eventID uint) {
+	event, err := h.eventRepo.GetByID(eventID)
+	if err != nil {
+		logger.Printf("failed to get event: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("Точно удалить «%s»? Это отменит все связанные с ним заказы.", event.Title),
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{Text: "✅ Да, удалить", CallbackData: fmt.Sprintf("admin_edit_ev_delete_yes_%d", eventID)},
+				{Text: "❌ Отмена", CallbackData: fmt.Sprintf("admin_edit_ev_delete_no_%d", eventID)},
+			},
+		}},
+	})
+}
+
+func (h *PosterHandler) Delete(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, eventID uint) {
+	if err := h.eventRepo.Delete(eventID); err != nil {
+		logger.Printf("failed to delete event: %v", err)
+		SendErrorMessage(ctx, b, chatID)
+		return
+	}
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "🗑 Мероприятие удалено."})
+	h.ShowList(ctx, b, chatID)
+}
+
+func SendErrorMessage(ctx context.Context, b *bot.Bot, chatID int64) {
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   "❌ Произошла ошибка. Пожалуйста, попробуйте позже.",
 	})
 }
 

@@ -37,6 +37,7 @@ type Server struct {
 	port            string
 	botToken        string
 	clientBot       *bot.Bot
+	adminBot        *bot.Bot
 	devMode         bool
 	userRepo        *repository.UserRepo
 	eventRepo       *repository.EventRepo
@@ -64,7 +65,7 @@ type browserLink struct {
 }
 
 func NewServer(
-	port, botToken string, clientBot *bot.Bot,
+	port, botToken string, clientBot, adminBot *bot.Bot,
 	userRepo *repository.UserRepo,
 	eventRepo *repository.EventRepo,
 	orderRepo *repository.OrderRepo,
@@ -81,6 +82,7 @@ func NewServer(
 		port:            port,
 		botToken:        botToken,
 		clientBot:       clientBot,
+		adminBot:        adminBot,
 		devMode:         os.Getenv("DEV_MODE") == "true",
 		userRepo:        userRepo,
 		eventRepo:       eventRepo,
@@ -1134,7 +1136,45 @@ func (s *Server) handleOrderAction(w http.ResponseWriter, r *http.Request, userI
 			}
 		}
 	}
+	s.notifyOrderResolved(r.Context(), order, newStatus)
+	notify.DeleteOrderMessages(r.Context(), s.adminBot, order.ID)
+
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// notifyOrderResolved tells the client their payment was confirmed or
+// rejected, mirroring the bot-side messages in internal/bot/admin/orders.go
+// so orders resolved from the web panel reach the client the same way.
+func (s *Server) notifyOrderResolved(ctx context.Context, order *db.Order, newStatus string) {
+	if order.User.TelegramID == 0 {
+		return
+	}
+	switch newStatus {
+	case "confirmed", "prepaid":
+		message := "✅ Оплата по заказу #{order_id} подтверждена!"
+		if setting, err := s.settingsRepo.Get("message_payment_confirmed"); err == nil && setting != nil && strings.TrimSpace(setting.Value) != "" {
+			message = setting.Value
+		}
+		message = strings.ReplaceAll(message, "{order_id}", fmt.Sprintf("%05d", order.ID))
+		if order.Event != nil {
+			message = strings.ReplaceAll(message, "{date}", order.Event.EventDate.Format("02.01.2006"))
+			message = strings.ReplaceAll(message, "{time}", order.Event.TimeFrom)
+			message = strings.ReplaceAll(message, "{title}", order.Event.Title)
+		}
+		notify.SendToUser(ctx, s.clientBot, order.User.TelegramID, message)
+	case "cancelled", "refunded":
+		contact := "@admin"
+		if setting, err := s.settingsRepo.Get("admin_contact"); err == nil && setting != nil && setting.Value != "" {
+			contact = setting.Value
+		}
+		message := "❌ По вашему заказу #{order_id} оплата не была подтверждена.\nЕсли это ошибка, напишите администратору: {admin_contact}"
+		if setting, err := s.settingsRepo.Get("message_payment_rejected"); err == nil && setting != nil && strings.TrimSpace(setting.Value) != "" {
+			message = setting.Value
+		}
+		message = strings.ReplaceAll(message, "{order_id}", fmt.Sprintf("%05d", order.ID))
+		message = strings.ReplaceAll(message, "{admin_contact}", contact)
+		notify.SendToUser(ctx, s.clientBot, order.User.TelegramID, message)
+	}
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, userID int64) {

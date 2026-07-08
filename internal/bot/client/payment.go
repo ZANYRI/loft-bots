@@ -361,6 +361,9 @@ func (h *PaymentHandler) RequestReceipt(ctx context.Context, b *bot.Bot, chatID 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "❌ Отмена", CallbackData: "main_menu"}},
+		}},
 	})
 }
 

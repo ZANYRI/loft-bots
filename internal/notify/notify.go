@@ -142,7 +142,10 @@ func DeleteOrderMessages(ctx context.Context, b *bot.Bot, orderID uint) {
 	}
 }
 
-func SendToUser(ctx context.Context, b *bot.Bot, chatID int64, text string) {
+// SendToUser sends text to a client chat and returns any send error so
+// callers can surface delivery failures (e.g. user blocked the bot) instead
+// of silently assuming the notification arrived.
+func SendToUser(ctx context.Context, b *bot.Bot, chatID int64, text string) error {
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
@@ -151,4 +154,5 @@ func SendToUser(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	if err != nil {
 		logger.Printf("failed to send message to user %d: %v", chatID, err)
 	}
+	return err
 }

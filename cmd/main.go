@@ -183,7 +183,7 @@ func main() {
 		go app.startReservationBalanceScheduler(ctx, clientB)
 		go app.startReservationStartReminderScheduler(ctx, clientB)
 
-		ws := app.newWebServer(webPort, adminBotToken, clientB)
+		ws := app.newWebServer(webPort, adminBotToken, clientB, adminB)
 		clientWebhookPath := "/telegram/webhook/client"
 		adminWebhookPath := "/telegram/webhook/admin"
 		ws.Handle(clientWebhookPath, clientB.WebhookHandler())
@@ -215,7 +215,7 @@ func main() {
 				webPort = "8080"
 			}
 
-			ws := app.newWebServer(webPort, adminBotToken, clientB)
+			ws := app.newWebServer(webPort, adminBotToken, clientB, adminB)
 			go func() {
 				if err := ws.Start(); err != nil {
 					logger.Printf("web server error: %v", err)
@@ -228,9 +228,9 @@ func main() {
 	logger.Println("Shutting down...")
 }
 
-func (app *App) newWebServer(webPort, adminBotToken string, clientB *bot.Bot) *web.Server {
+func (app *App) newWebServer(webPort, adminBotToken string, clientB, adminB *bot.Bot) *web.Server {
 	return web.NewServer(
-		webPort, adminBotToken, clientB,
+		webPort, adminBotToken, clientB, adminB,
 		app.userRepo, app.eventRepo, app.orderRepo,
 		app.reservationRepo, app.settingsRepo,
 		app.rentalPriceRepo, app.menuCatRepo, app.menuItemRepo,
@@ -1058,6 +1058,43 @@ func deleteClientCallbackMessage(ctx context.Context, b *bot.Bot, update *models
 	}
 }
 
+// shouldReplaceAdminMessage mirrors shouldReplaceClientMessage: nearly every
+// admin navigation callback should replace the tapped message with the next
+// screen instead of piling up new messages. admin_confirm_/admin_reject_ are
+// excluded because HandleConfirm/HandleReject already clean up the order
+// notification across every admin chat via notify.DeleteOrderMessages.
+func shouldReplaceAdminMessage(data string) bool {
+	if data == "noop" {
+		return false
+	}
+	if strings.HasPrefix(data, "admin_confirm_") || strings.HasPrefix(data, "admin_reject_") {
+		return false
+	}
+	return strings.HasPrefix(data, "admin_")
+}
+
+// lastUintParam extracts the trailing numeric ID from a callback data
+// string, regardless of how many underscore-separated words precede it
+// (e.g. "admin_edit_ev_delete_yes_12" -> 12).
+func lastUintParam(data string) uint {
+	idx := strings.LastIndex(data, "_")
+	if idx == -1 {
+		return 0
+	}
+	v, _ := strconv.ParseUint(data[idx+1:], 10, 64)
+	return uint(v)
+}
+
+func deleteAdminCallbackMessage(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.CallbackQuery == nil || update.CallbackQuery.Message.Message == nil {
+		return
+	}
+	message := update.CallbackQuery.Message.Message
+	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: message.Chat.ID, MessageID: message.ID}); err != nil {
+		logger.Printf("failed to replace admin message: chat_id=%d message_id=%d err=%v", message.Chat.ID, message.ID, err)
+	}
+}
+
 func (app *App) handleAdminStart(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
@@ -1120,6 +1157,18 @@ func (app *App) handleAdminMessage(ctx context.Context, b *bot.Bot, update *mode
 		app.adminSettingsHandler.HandleNewPhone(ctx, b, chatID, telegramID, update.Message.Text)
 	case "admin:settings:name":
 		app.adminSettingsHandler.HandleNewName(ctx, b, chatID, telegramID, update.Message.Text)
+	case "admin:editev:title":
+		app.adminPosterHandler.HandleEditTitle(ctx, b, chatID, telegramID, update.Message.Text)
+	case "admin:editev:desc":
+		app.adminPosterHandler.HandleEditDescription(ctx, b, chatID, telegramID, update.Message.Text)
+	case "admin:editev:photo":
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Пожалуйста, отправьте изображение как фото."})
+	case "admin:editev:dt":
+		app.adminPosterHandler.HandleEditDateTime(ctx, b, chatID, telegramID, update.Message.Text)
+	case "admin:editev:price":
+		app.adminPosterHandler.HandleEditPrice(ctx, b, chatID, telegramID, update.Message.Text)
+	case "admin:editev:places":
+		app.adminPosterHandler.HandleEditPlaces(ctx, b, chatID, telegramID, update.Message.Text)
 	}
 }
 
@@ -1130,12 +1179,17 @@ func (app *App) handleAdminPhoto(ctx context.Context, b *bot.Bot, update *models
 
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
-	if !app.isAuthorized(telegramID, update.Message.From.Username) || !app.fsm.IsInState(telegramID, "admin", "admin:poster:photo") {
+	if !app.isAuthorized(telegramID, update.Message.From.Username) {
 		return
 	}
 
 	photo := update.Message.Photo[len(update.Message.Photo)-1]
-	app.adminPosterHandler.HandlePhoto(ctx, b, chatID, telegramID, photo.FileID)
+	switch {
+	case app.fsm.IsInState(telegramID, "admin", "admin:poster:photo"):
+		app.adminPosterHandler.HandlePhoto(ctx, b, chatID, telegramID, photo.FileID)
+	case app.fsm.IsInState(telegramID, "admin", "admin:editev:photo"):
+		app.adminPosterHandler.HandleEditPhoto(ctx, b, chatID, telegramID, photo.FileID)
+	}
 }
 
 func (app *App) isAuthorized(telegramID int64, username string) bool {
@@ -1226,6 +1280,10 @@ func (app *App) handleAdminCallback(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
+	if shouldReplaceAdminMessage(data) {
+		deleteAdminCallbackMessage(ctx, b, update)
+	}
+
 	switch {
 	case data == "admin_main_menu":
 		app.showAdminMainMenu(ctx, b, chatID)
@@ -1264,6 +1322,39 @@ func (app *App) handleAdminCallback(ctx context.Context, b *bot.Bot, update *mod
 
 	case data == "admin_poster_phone_no":
 		app.adminPosterHandler.HandlePaymentPhoneChoice(ctx, b, chatID, telegramID, false)
+
+	case strings.HasPrefix(data, "admin_poster_edit_"):
+		app.adminPosterHandler.Edit(ctx, b, chatID, telegramID, lastUintParam(data))
+
+	case strings.HasPrefix(data, "admin_edit_ev_delete_yes_"):
+		app.adminPosterHandler.Delete(ctx, b, chatID, telegramID, lastUintParam(data))
+
+	case strings.HasPrefix(data, "admin_edit_ev_delete_no_"):
+		app.adminPosterHandler.Edit(ctx, b, chatID, telegramID, lastUintParam(data))
+
+	case strings.HasPrefix(data, "admin_edit_ev_delete_"):
+		app.adminPosterHandler.ConfirmDelete(ctx, b, chatID, lastUintParam(data))
+
+	case strings.HasPrefix(data, "admin_edit_ev_toggle_"):
+		app.adminPosterHandler.ToggleActive(ctx, b, chatID, telegramID, lastUintParam(data))
+
+	case strings.HasPrefix(data, "admin_edit_ev_title_"):
+		app.adminPosterHandler.StartEditField(ctx, b, chatID, telegramID, lastUintParam(data), "title")
+
+	case strings.HasPrefix(data, "admin_edit_ev_desc_"):
+		app.adminPosterHandler.StartEditField(ctx, b, chatID, telegramID, lastUintParam(data), "desc")
+
+	case strings.HasPrefix(data, "admin_edit_ev_photo_"):
+		app.adminPosterHandler.StartEditField(ctx, b, chatID, telegramID, lastUintParam(data), "photo")
+
+	case strings.HasPrefix(data, "admin_edit_ev_dt_"):
+		app.adminPosterHandler.StartEditField(ctx, b, chatID, telegramID, lastUintParam(data), "dt")
+
+	case strings.HasPrefix(data, "admin_edit_ev_price_"):
+		app.adminPosterHandler.StartEditField(ctx, b, chatID, telegramID, lastUintParam(data), "price")
+
+	case strings.HasPrefix(data, "admin_edit_ev_places_"):
+		app.adminPosterHandler.StartEditField(ctx, b, chatID, telegramID, lastUintParam(data), "places")
 
 	case data == "admin_menu":
 		app.adminMenuHandler.ShowMenu(ctx, b, chatID)

@@ -61,10 +61,16 @@ func (h *OrdersHandler) HandleConfirm(ctx context.Context, b *bot.Bot, chatID in
 		values["time"] = order.Event.TimeFrom
 		values["title"] = order.Event.Title
 	}
-	notify.SendToUser(ctx, h.clientBot, order.User.TelegramID, renderMessage(message, values))
+	deliveryErr := notify.SendToUser(ctx, h.clientBot, order.User.TelegramID, renderMessage(message, values))
 	notify.DeleteOrderMessages(ctx, b, orderID)
 	metrics.OrdersResolvedTotal.WithLabelValues("confirmed").Inc()
 	logger.Info("order confirmed", "order_id", orderID)
+	if deliveryErr != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("⚠️ Не удалось уведомить клиента по заказу #%05d (возможно, заблокировал бота): %v", orderID, deliveryErr),
+		})
+	}
 	if order.ReservationID != nil {
 		if setting, err := h.settingsRepo.Get("offer_pdf_url"); err == nil && setting != nil && strings.TrimSpace(setting.Value) != "" {
 			if _, err := h.clientBot.SendDocument(ctx, &bot.SendDocumentParams{
@@ -121,7 +127,7 @@ func (h *OrdersHandler) HandleReject(ctx context.Context, b *bot.Bot, chatID int
 		contact = setting.Value
 	}
 	rejectMessage := h.settingValue("message_payment_rejected", "❌ По вашему заказу #{order_id} оплата не была подтверждена.\nЕсли это ошибка, напишите администратору: {admin_contact}")
-	notify.SendToUser(ctx, h.clientBot, order.User.TelegramID, renderMessage(rejectMessage, map[string]string{
+	deliveryErr := notify.SendToUser(ctx, h.clientBot, order.User.TelegramID, renderMessage(rejectMessage, map[string]string{
 		"order_id":      fmt.Sprintf("%05d", orderID),
 		"admin_contact": contact,
 	}))
@@ -133,7 +139,13 @@ func (h *OrdersHandler) HandleReject(ctx context.Context, b *bot.Bot, chatID int
 		ChatID: chatID,
 		Text:   fmt.Sprintf("\u274C Заказ #%05d отклонён", orderID),
 	})
-}
+
+	if deliveryErr != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("⚠️ Не удалось уведомить клиента по заказу #%05d: %v", orderID, deliveryErr),
+		})
+	}}
 
 func (h *OrdersHandler) settingValue(key, fallback string) string {
 	setting, err := h.settingsRepo.Get(key)
